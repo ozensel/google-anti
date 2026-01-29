@@ -13,17 +13,28 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.furkan.googleanti",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Uygulama güvenliği için FaceID kullanılıyor.",
+        "NSMicrophoneUsageDescription": "Rüyanızı sesli anlatabilmeniz için mikrofon izni gereklidir.",
+        "NSSpeechRecognitionUsageDescription": "Konuşmanızı yazıya çevirebilmek için ses tanıma izni gereklidir."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.furkan.googleanti"
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-font",
+      "expo-localization"
+    ]
   }
 }
