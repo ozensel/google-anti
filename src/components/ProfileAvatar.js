@@ -77,10 +77,16 @@ const ProfileAvatar = ({ size = 140, onPress, showBadge = true }) => {
             <View style={{
                 width: innerContainerSize, height: innerContainerSize,
                 borderRadius: innerContainerSize / 2, backgroundColor: '#191022',
-                justifyContent: 'center', alignItems: 'center'
+                justifyContent: 'center', alignItems: 'center',
+                overflow: 'hidden'
             }}>
                 <Image
-                    source={{ uri: profile?.avatar_url || 'https://lh3.googleusercontent.com/aida-public/AB6AXuCXuO__OObJsFp8qm6OoJWkKNiOwhZDsQ4T_prwU9gRzHAgiirx5aRticY9bENq4Jjksje2zER-bGkY9Zd36hRV1oCTxB6P5RJzvdbPPy94cYvHNXxnSVc079wpHa-YMK0X79OjV6GvS5rGgXNlkKNR2hMvwfZTMldCodUIico2FsJn6eqvXB1FWphP74GV--PrLO9AtfBB982VpKdsDFQeOJ8vfMXa9WU_M6nq_rCXbZm6f0dGMokTj4UfF97viP_5ecKtTryLUi8' }}
+                    source={
+                        profile?.avatar_url === 'avatar_male' ? require('../../assets/avatars/avatar_male.png') :
+                            profile?.avatar_url === 'avatar_female' ? require('../../assets/avatars/avatar_female.png') :
+                                profile?.avatar_url === 'avatar_other' ? require('../../assets/avatars/avatar_other.png') :
+                                    { uri: profile?.avatar_url || 'https://lh3.googleusercontent.com/aida-public/AB6AXuCXuO__OObJsFp8qm6OoJWkKNiOwhZDsQ4T_prwU9gRzHAgiirx5aRticY9bENq4Jjksje2zER-bGkY9Zd36hRV1oCTxB6P5RJzvdbPPy94cYvHNXxnSVc079wpHa-YMK0X79OjV6GvS5rGgXNlkKNR2hMvwfZTMldCodUIico2FsJn6eqvXB1FWphP74GV--PrLO9AtfBB982VpKdsDFQeOJ8vfMXa9WU_M6nq_rCXbZm6f0dGMokTj4UfF97viP_5ecKtTryLUi8' }
+                    }
                     style={{ width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2 }}
                 />
             </View>

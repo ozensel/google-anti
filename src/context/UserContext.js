@@ -60,7 +60,20 @@ export const UserProvider = ({ children }) => {
             console.log("UserContext: setting Initial authenticated =", !isBiometric);
             setIsBiometricAuthenticated(!isBiometric);
 
-            // Supabase oturumunu kontrol et
+            // 1. Önce Cache'den profil yükle (Anında görüntüleme için)
+            try {
+                const cachedProfile = await AsyncStorage.getItem('user_profile_cache');
+                if (cachedProfile) {
+                    const p = JSON.parse(cachedProfile);
+                    setProfile(p);
+                    setCredits(p.credits);
+                    setIsFirstDream(p.is_first_dream);
+                }
+            } catch (e) {
+                console.log('Cache load error', e);
+            }
+
+            // 2. Sonra Supabase oturumunu kontrol et (Güncel veriyi çeker)
             const { data: { session } } = await supabase.auth.getSession();
 
             if (session) {
@@ -94,6 +107,9 @@ export const UserProvider = ({ children }) => {
             }
 
             if (data) {
+                // Cache'i güncelle
+                await AsyncStorage.setItem('user_profile_cache', JSON.stringify(data));
+
                 setProfile(data); // Expose full profile data
                 setCredits(data.credits);
                 setIsFirstDream(data.is_first_dream);
@@ -181,6 +197,7 @@ export const UserProvider = ({ children }) => {
         setIsFirstDream(true); // State'i temizle
         setIsProfileComplete(false); // State'i temizle
         setCompletionPercentage(0); // State'i temizle
+        await AsyncStorage.removeItem('user_profile_cache'); // Cache'i temizle
     };
 
     const changeLanguage = async (langCode) => {
@@ -267,6 +284,34 @@ export const UserProvider = ({ children }) => {
         await AsyncStorage.setItem('isBiometricEnabled', value.toString());
     };
 
+    const deleteAccount = async () => {
+        if (!user) return;
+        try {
+            // 1. Delete Dreams (Cascade should handle this if configured, but manual safety is good)
+            const { error: dreamsError } = await supabase
+                .from('dreams')
+                .delete()
+                .eq('user_id', user.id);
+
+            if (dreamsError) console.error("Error deleting dreams:", dreamsError);
+
+            // 2. Delete Profile
+            const { error: profileError } = await supabase
+                .from('profiles')
+                .delete()
+                .eq('id', user.id);
+
+            if (profileError) throw profileError;
+
+            // 3. Sign Out
+            await logout();
+            return { success: true };
+        } catch (error) {
+            console.error("Delete account error:", error);
+            return { success: false, error };
+        }
+    };
+
     return (
         <UserContext.Provider value={{
             user,
@@ -290,7 +335,9 @@ export const UserProvider = ({ children }) => {
             profile,
             isBiometricAuthenticated,
             setIsBiometricAuthenticated,
-            completionPercentage // Expose percentage
+            completionPercentage, // Expose percentage
+            deleteAccount, // Expose delete function
+            fetchProfile // Expose fetchProfile for manual refresh
         }}>
             {children}
         </UserContext.Provider>

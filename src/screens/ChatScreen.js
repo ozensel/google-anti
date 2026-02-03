@@ -1,18 +1,20 @@
 import { useRef, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, Dimensions, Platform, KeyboardAvoidingView, Modal, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, Dimensions, Platform, KeyboardAvoidingView, Modal, ActivityIndicator, Alert, TouchableWithoutFeedback, Keyboard } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialIcons, Feather, FontAwesome5 } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useUser } from '../context/UserContext';
 import ViewShot from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
+import { supabase } from '../lib/supabase';
+import ProfileAvatar from '../components/ProfileAvatar';
 
 const { width, height } = Dimensions.get('window');
 
 const ChatScreen = ({ navigation, route }) => {
     const { dreamId, dreamText, interpreter = 'Sigmund', tag, mood, previousAnalysis, previousMessages, unlocked = false } = route.params || {};
-    const { credits, useCredit, isFirstDream, completeFirstDream, t, profile } = useUser();
+    const { credits, useCredit, isFirstDream, completeFirstDream, t, profile, user, fetchProfile } = useUser();
 
     // Use passed dreamId or null (will be created on save)
     const [currentDreamId, setCurrentDreamId] = useState(dreamId);
@@ -73,6 +75,11 @@ const ChatScreen = ({ navigation, route }) => {
             triggerAnalysis();
             if (isFirstDream) completeFirstDream();
         }
+
+        // Refresh profile to get latest avatar
+        if (user?.id && fetchProfile) {
+            fetchProfile(user.id);
+        }
     }, [dreamText]);
 
     const [loading, setLoading] = useState(false);
@@ -109,48 +116,30 @@ const ChatScreen = ({ navigation, route }) => {
 
     // Helper to save/update dream
     const saveConversation = async (newMessages, analysisText = null) => {
+        if (!user) return; // Guard against no user
         try {
-            const existingDreamsJson = await AsyncStorage.getItem('user_dreams_history');
-            const existingDreams = existingDreamsJson ? JSON.parse(existingDreamsJson) : [];
+            let newId = currentDreamId || Date.now().toString();
+            if (!currentDreamId) setCurrentDreamId(newId);
 
-            let updatedDreams;
-            let newId = currentDreamId;
+            const dreamData = {
+                id: newId,
+                user_id: user.id,
+                date: new Date().toISOString(),
+                title: dreamText && dreamText.length > 30 ? dreamText.substring(0, 30) + "..." : (dreamText || "Rüya"),
+                text: dreamText,
+                analysis: analysisText || (messages.find(m => m.type === 'ai')?.text || ""),
+                messages: newMessages,
+                mood: mood || 'feeling_neutral',
+                tag: tag || 'tag_general',
+                interpreter: interpreter
+            };
 
-            if (currentDreamId) {
-                // Update existing
-                updatedDreams = existingDreams.map(d => {
-                    if (d.id === currentDreamId) {
-                        return {
-                            ...d,
-                            messages: newMessages,
-                            // Update analysis if provided (e.g. initial analysis)
-                            ...(analysisText ? { analysis: analysisText } : {})
-                        };
-                    }
-                    return d;
-                });
-            } else {
-                // Create New
-                newId = Date.now().toString();
-                setCurrentDreamId(newId);
+            const { error } = await supabase
+                .from('dreams')
+                .upsert(dreamData);
 
-                const newDream = {
-                    id: newId,
-                    date: new Date().toISOString(),
-                    title: dreamText && dreamText.length > 30 ? dreamText.substring(0, 30) + "..." : (dreamText || "Rüya"),
-                    text: dreamText,
-                    analysis: analysisText || "",
-                    messages: newMessages,
-                    mood: mood || 'neutral',
-                    tag: tag || 'general',
-                    interpreter: interpreter
-                };
-                // Prepend
-                updatedDreams = [newDream, ...existingDreams];
-            }
-
-            await AsyncStorage.setItem('user_dreams_history', JSON.stringify(updatedDreams));
-            console.log("Conversation saved!");
+            if (error) throw error;
+            console.log("Conversation saved to Supabase!");
         } catch (error) {
             console.error("Failed to save conversation:", error);
         }
@@ -343,30 +332,34 @@ Interpret this dream now.
         setLoading(false);
         setLoadingStatus("");
 
-        // SAVE DREAM TO HISTORY
-        try {
-            const newDream = {
-                id: Date.now().toString(),
-                date: new Date().toISOString(),
-                title: dreamText.length > 30 ? dreamText.substring(0, 30) + "..." : dreamText,
-                text: dreamText,
-                analysis: aiResponse,
-                mood: mood || 'neutral',
-                tag: tag || 'general',
-                interpreter: interpreter
-            };
+        // SAVE DREAM TO SUPABASE
+        if (user) {
+            try {
+                const newId = Date.now().toString();
+                const newDream = {
+                    id: newId,
+                    user_id: user.id,
+                    date: new Date().toISOString(),
+                    title: dreamText.length > 30 ? dreamText.substring(0, 30) + "..." : dreamText,
+                    text: dreamText,
+                    analysis: aiResponse,
+                    mood: mood || 'feeling_neutral',
+                    tag: tag || 'tag_general',
+                    interpreter: interpreter,
+                    messages: [...messages, analysisMsg] // Save initial flow
+                };
 
-            const existingDreamsJson = await AsyncStorage.getItem('user_dreams_history');
-            const existingDreams = existingDreamsJson ? JSON.parse(existingDreamsJson) : [];
+                const { error } = await supabase
+                    .from('dreams')
+                    .insert(newDream);
 
-            // Add new dream to the beginning of the list
-            const updatedDreams = [newDream, ...existingDreams];
+                if (error) throw error;
 
-            await AsyncStorage.setItem('user_dreams_history', JSON.stringify(updatedDreams));
-            setCurrentDreamId(newDream.id); // FIX: Set ID so subsequent chats update this dream
-            console.log("Dream saved successfully!");
-        } catch (error) {
-            console.error("Failed to save dream:", error);
+                setCurrentDreamId(newId);
+                console.log("Dream saved to Supabase successfully!");
+            } catch (error) {
+                console.error("Failed to save dream:", error);
+            }
         }
     };
 
@@ -484,83 +477,75 @@ Interpret this dream now.
     };
 
     // ChatBubble component (extracted from original ScrollView rendering logic)
-    const ChatBubble = ({ message, isUser }) => (
-        <View key={message.id} style={[
-            styles.messageRow,
-            isUser ? styles.messageRowUser : styles.messageRowAi
-        ]}>
-            {/* AI Avatar (Left) */}
-            {!isUser && (
-                <View style={styles.avatarContainer}>
-                    <LinearGradient
-                        colors={['#7f13ec', '#251b2e']}
-                        style={styles.avatarGradient}
-                    >
-                        <Image
-                            source={{ uri: 'https://lh3.googleusercontent.com/aida-public/AB6AXuBCidDKCngN2ln00JQKpdjCFy1gEkUqKKuznUkx-yzpMVL8AkLeoF6S0nhX_s_j5IPIJwmceqOWpUS4e-6N9bpnIZL20KXdNESS-abEKj3nkmh7sZrd1LxxCKy8y9o161HaDPccFsqhT_ZHl5q2Kyy4DcltjGuiTIzXb5EoP_dDYlQWWcVukO9X_WTSjveaXuTaiyZo0Rd1Gabf6qCbKirkNfg69LXk6qVaGRsOozYiMbk9GyTrOltL0-EqnxtpNK3teQRGk1tNQaWR' }}
-                            style={styles.avatarImage}
-                        />
-                    </LinearGradient>
-                </View>
-            )}
+    const ChatBubble = ({ message, isUser }) => {
+        // Determine user avatar URL with fallbacks
+        const userAvatarUrl = isUser ? (profile?.avatar_url || user?.user_metadata?.avatar_url || user?.user_metadata?.picture) : null;
+        const [imageError, setImageError] = useState(false);
 
-            {/* Bubble */}
-            <View style={[
-                styles.bubble,
-                isUser ? styles.bubbleUser : styles.bubbleAi,
-                message.highlighted && styles.bubbleHighlighted
+        return (
+            <View key={message.id} style={[
+                styles.messageRow,
+                isUser ? styles.messageRowUser : styles.messageRowAi
             ]}>
-                {isUser && (
-                    <LinearGradient
-                        colors={['#A855F7', '#7f13ec']}
-                        style={StyleSheet.absoluteFillObject}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                    />
+                {/* AI Avatar (Left) */}
+                {!isUser && (
+                    <View style={styles.avatarContainer}>
+                        <LinearGradient
+                            colors={['#7f13ec', '#251b2e']}
+                            style={styles.avatarGradient}
+                        >
+                            <Image
+                                source={{ uri: 'https://lh3.googleusercontent.com/aida-public/AB6AXuBCidDKCngN2ln00JQKpdjCFy1gEkUqKKuznUkx-yzpMVL8AkLeoF6S0nhX_s_j5IPIJwmceqOWpUS4e-6N9bpnIZL20KXdNESS-abEKj3nkmh7sZrd1LxxCKy8y9o161HaDPccFsqhT_ZHl5q2Kyy4DcltjGuiTIzXb5EoP_dDYlQWWcVukO9X_WTSjveaXuTaiyZo0Rd1Gabf6qCbKirkNfg69LXk6qVaGRsOozYiMbk9GyTrOltL0-EqnxtpNK3teQRGk1tNQaWR' }}
+                                style={styles.avatarImage}
+                            />
+                        </LinearGradient>
+                    </View>
                 )}
 
-                {message.isHeader && <Text style={styles.senderName}>{t('interpreter')}</Text>}
-                <Text style={[styles.messageText, isUser && styles.messageTextUser]}>
-                    {message.highlighted ? (
-                        <Text>
-                            {message.text}
-                        </Text>
-                    ) : message.text}
-                </Text>
+                {/* Bubble */}
+                <View style={[
+                    styles.bubble,
+                    isUser ? styles.bubbleUser : styles.bubbleAi,
+                    message.highlighted && styles.bubbleHighlighted
+                ]}>
+                    {isUser && (
+                        <LinearGradient
+                            colors={['#A855F7', '#7f13ec']}
+                            style={StyleSheet.absoluteFillObject}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                        />
+                    )}
+
+                    {message.isHeader && <Text style={styles.senderName}>{t('interpreter')}</Text>}
+                    <Text style={[styles.messageText, isUser && styles.messageTextUser]}>
+                        {message.highlighted ? (
+                            <Text>
+                                {message.text}
+                            </Text>
+                        ) : message.text}
+                    </Text>
+                    {isUser && (
+                        <View style={styles.readReceipt}>
+                            <Ionicons name="checkmark-done" size={12} color="rgba(255,255,255,0.6)" />
+                        </View>
+                    )}
+                </View>
+
                 {isUser && (
-                    <View style={styles.readReceipt}>
-                        <Ionicons name="checkmark-done" size={12} color="rgba(255,255,255,0.6)" />
+                    <View style={styles.userAvatarPlaceholder}>
+                        <View style={styles.userAvatarInner} />
+                    </View>
+                )}
+                {/* User Avatar (Right) */}
+                {isUser && (
+                    <View style={styles.userAvatarContainer}>
+                        <ProfileAvatar size={34} showBadge={false} />
                     </View>
                 )}
             </View>
-
-            {isUser && (
-                <View style={styles.userAvatarPlaceholder}>
-                    <View style={styles.userAvatarInner} />
-                </View>
-            )}
-            {/* User Avatar (Right) */}
-            {isUser && (
-                <View style={styles.userAvatarContainer}>
-                    <LinearGradient
-                        colors={['#4c1d95', '#251b2e']}
-                        style={styles.avatarGradient}
-                    >
-                        {profile?.avatar_url ? (
-                            <Image
-                                source={{ uri: profile.avatar_url }}
-                                style={{ width: 32, height: 32, borderRadius: 16 }}
-                            />
-                        ) : (
-                            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                                <Ionicons name="person" size={16} color="rgba(255,255,255,0.7)" />
-                            </View>
-                        )}
-                    </LinearGradient>
-                </View>
-            )}
-        </View>
-    );
+        );
+    };
 
 
     return (
@@ -656,42 +641,52 @@ Interpret this dream now.
             {/* Messages Area */}
             <ScrollView
                 ref={scrollViewRef}
-                style={styles.messagesContainer}
-                contentContainerStyle={styles.messagesContent}
+                style={[styles.messagesContainer, { backgroundColor: '#191022' }]}
+                contentContainerStyle={[styles.messagesContent, { flexGrow: 1 }]}
                 onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
             >
-                <View style={styles.dateBadge}>
-                    <Text style={styles.dateBadgeText}>{t('today')}</Text>
-                </View>
+                <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+                    <View style={{ flex: 1 }}>
+                        <View style={styles.dateBadge}>
+                            <Text style={styles.dateBadgeText}>{t('today')}</Text>
+                        </View>
 
-                {messages.map((msg, index) => (
-                    <ChatBubble
-                        key={msg.id || index}
-                        message={msg}
-                        isUser={msg.type === 'user'}
-                    />
-                ))}
+                        {messages.map((msg, index) => (
+                            <ChatBubble
+                                key={msg.id || index}
+                                message={msg}
+                                isUser={msg.type === 'user'}
+                            />
+                        ))}
 
-                {loading && (
-                    <View style={{ padding: 20, alignItems: 'center', justifyContent: 'center' }}>
-                        <ActivityIndicator size="small" color="#A855F7" />
-                        <Text style={{
-                            color: 'rgba(255,255,255,0.6)',
-                            fontSize: 13,
-                            marginTop: 10,
-                            textAlign: 'center',
-                            fontFamily: 'SplineSans_400Regular' // Fixed font family name if needed, assuming Inter_400Regular was placeholder
-                        }}>
-                            {loadingStatus || t('analyzing_dream') || "Rüyanız inceleniyor..."}
-                        </Text>
+                        {loading && (
+                            <View style={{ padding: 20, alignItems: 'center', justifyContent: 'center' }}>
+                                <ActivityIndicator size="small" color="#A855F7" />
+                                <Text style={{
+                                    color: 'rgba(255,255,255,0.6)',
+                                    fontSize: 13,
+                                    marginTop: 10,
+                                    textAlign: 'center',
+                                    fontFamily: 'SplineSans_400Regular' // Fixed font family name if needed, assuming Inter_400Regular was placeholder
+                                }}>
+                                    {loadingStatus || t('analyzing_dream') || "Rüyanız inceleniyor..."}
+                                </Text>
+                            </View>
+                        )}
+
+                        {/* Removed System Message Badge as per user request */}
                     </View>
-                )}
-
-                {/* Removed System Message Badge as per user request */}
+                </TouchableWithoutFeedback>
             </ScrollView>
 
             {/* Footer Area */}
-            < KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0} >
+            <KeyboardAvoidingView
+                behavior={Platform.OS === "ios" ? "padding" : "height"}
+                keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+                style={{ backgroundColor: '#191022' }}
+            >
                 {
                     isLocked ? (
                         // LOCKED FOOTER

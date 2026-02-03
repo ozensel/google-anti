@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, Dimensions, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Dimensions, TouchableOpacity, RefreshControl, Animated, Easing, Image } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { useUser } from '../context/UserContext';
+import { supabase } from '../lib/supabase';
+import CreditBalanceButton from '../components/CreditBalanceButton';
 
 const { width } = Dimensions.get('window');
 
 const AnalysisScreen = () => {
-    const { t } = useUser();
+    const { t, user } = useUser();
     const [awarenessScore, setAwarenessScore] = useState(0);
     const [scoreGrade, setScoreGrade] = useState('-');
     const [monthlyCount, setMonthlyCount] = useState(0);
@@ -19,6 +20,42 @@ const AnalysisScreen = () => {
     const [topSymbols, setTopSymbols] = useState([]);
     const [aiInsight, setAiInsight] = useState('');
 
+    // Refresh & Animation State
+    const [refreshing, setRefreshing] = useState(false);
+    const spinValue = React.useRef(new Animated.Value(0)).current;
+
+    const startSpin = () => {
+        spinValue.setValue(0);
+        Animated.loop(
+            Animated.timing(spinValue, {
+                toValue: 1,
+                duration: 1000,
+                easing: Easing.linear,
+                useNativeDriver: true,
+            })
+        ).start();
+    };
+
+    const stopSpin = () => {
+        spinValue.stopAnimation();
+    };
+
+    const spin = spinValue.interpolate({
+        inputRange: [0, 1],
+        outputRange: ['0deg', '360deg'],
+    });
+
+    const onRefresh = useCallback(async () => {
+        setRefreshing(true);
+        startSpin();
+        await calculateScore();
+        // UX delay
+        setTimeout(() => {
+            setRefreshing(false);
+            stopSpin();
+        }, 800);
+    }, [user]);
+
     useFocusEffect(
         useCallback(() => {
             calculateScore();
@@ -26,15 +63,25 @@ const AnalysisScreen = () => {
     );
 
     const calculateScore = async () => {
+        if (!user) return;
         try {
-            // Load both datasets: 'user_dreams_history' (Chat History) and 'dream_notes' (Personal Notes)
-            const historyJson = await AsyncStorage.getItem('user_dreams_history');
-            const notesJson = await AsyncStorage.getItem('dream_notes');
+            // Load both datasets from Supabase
+            const { data: historyDreams, error: errorDreams } = await supabase
+                .from('dreams')
+                .select('*')
+                .eq('user_id', user.id);
 
-            const historyDreams = historyJson ? JSON.parse(historyJson) : [];
-            const noteDreams = notesJson ? JSON.parse(notesJson) : [];
+            const { data: noteDreams, error: errorNotes } = await supabase
+                .from('dream_notes')
+                .select('*')
+                .eq('user_id', user.id);
 
-            const allDreams = [...historyDreams, ...noteDreams];
+            if (errorDreams || errorNotes) {
+                console.error("Error fetching data for analysis:", errorDreams, errorNotes);
+                return;
+            }
+
+            const allDreams = [...(historyDreams || []), ...(noteDreams || [])];
 
             if (allDreams.length === 0) {
                 setAwarenessScore(0);
@@ -42,7 +89,7 @@ const AnalysisScreen = () => {
                 setMonthlyCount(0);
                 setLucidRate(0);
                 setTopSymbols([]);
-                setAiInsight(t('insight_default')); // Default message
+                setAiInsight(t('no_data_insight') || t('insight_default'));
                 return;
             }
 
@@ -59,7 +106,10 @@ const AnalysisScreen = () => {
                 if (d.text) totalWords += d.text.split(' ').length;
                 if (d.mood) uniqueMoods.add(d.mood);
                 // Quality/Lucid check
-                if (d.isLucid || (d.tags && d.tags.includes('lucid')) || (d.title && d.title.toLowerCase().includes('lucid')) || d.mood === 'great' || d.mood === 'feeling_great') {
+                const isLucidTag = (d.tags && Array.isArray(d.tags) && d.tags.includes('lucid')) || (d.tag === 'lucid' || d.tag === 'tag_lucid');
+                const isLucidTitle = d.title && d.title.toLowerCase().includes('lucid');
+
+                if (d.isLucid || isLucidTag || isLucidTitle || d.mood === 'great' || d.mood === 'feeling_great') {
                     qualityDreams.push(d);
                 }
             });
@@ -148,6 +198,7 @@ const AnalysisScreen = () => {
             const BLACKLIST = new Set(['huzurla', 'eserken', 'her', 'ılık', 'çok', 'canlı', 've', 'bir', 'bu', 'şu']);
 
             dreams.forEach(d => {
+                // Handle d.tags (Array - Notes)
                 if (d.tags && Array.isArray(d.tags)) {
                     d.tags.forEach(tag => {
                         const cleanTag = tag.toLowerCase().trim();
@@ -155,6 +206,13 @@ const AnalysisScreen = () => {
                             symbolCounts[cleanTag] = (symbolCounts[cleanTag] || 0) + 5;
                         }
                     });
+                }
+                // Handle d.tag (String - Dreams)
+                if (d.tag && typeof d.tag === 'string') {
+                    const cleanTag = d.tag.replace('tag_', '').toLowerCase().trim();
+                    if (cleanTag !== 'general' && !BLACKLIST.has(cleanTag)) {
+                        symbolCounts[cleanTag] = (symbolCounts[cleanTag] || 0) + 5;
+                    }
                 }
                 if (d.text) {
                     const text = d.text.toLowerCase().replace(/[.,!?;:()"]/g, ' ');
@@ -260,14 +318,56 @@ const AnalysisScreen = () => {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <View style={styles.header}>
-                <View style={{ alignItems: 'center', width: '100%' }}>
-                    <Text style={styles.headerTitle}>{t('dream_insights_title')}</Text>
-                    <Text style={styles.headerSubtitle}>{t('subconscious_map')}</Text>
+            <View style={[styles.header, { zIndex: 100, backgroundColor: '#191022' }]}>
+                <View style={{ width: 60 }} />
+                <View style={{ alignItems: 'center' }}>
+                    <Text style={styles.headerTitle}>{t('dream_analysis_title') || 'Rüya Karnesi'}</Text>
+                    <Text style={styles.headerSubtitle}>{t('monthly_overview') || 'Aylık Genel Bakış'}</Text>
+                </View>
+                <View style={{ width: 60, alignItems: 'flex-end' }}>
+                    <CreditBalanceButton dark={true} />
                 </View>
             </View>
 
-            <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+            <ScrollView
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+                overflow="visible" // Allow bear to be seen above
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        tintColor="transparent"
+                        colors={['transparent']}
+                        style={{ backgroundColor: 'transparent', zIndex: 100 }}
+                    />
+                }
+            >
+                {/* Custom Bear Refresher (Moves with scroll) */}
+                <View style={{ position: 'absolute', top: -150, left: 0, right: 0, height: 140, alignItems: 'center', justifyContent: 'flex-end', zIndex: 10 }}>
+                    <View style={{ alignItems: 'center', justifyContent: 'center', transform: [{ translateY: 5 }] }}>
+                        {/* Spinning Stars */}
+                        <Animated.View style={{
+                            position: 'absolute',
+                            width: 140,
+                            height: 140,
+                            justifyContent: 'center',
+                            alignItems: 'center',
+                            transform: [{ rotate: spin }],
+                            opacity: refreshing ? 1 : 0
+                        }}>
+                            <Ionicons name="star" size={18} color="#FCD34D" style={{ position: 'absolute', top: 10 }} />
+                            <Ionicons name="star" size={12} color="#FCD34D" style={{ position: 'absolute', bottom: 30, right: 30 }} />
+                            <Ionicons name="star" size={15} color="#FCD34D" style={{ position: 'absolute', bottom: 30, left: 30 }} />
+                        </Animated.View>
+
+                        {/* Bear Image (Swap based on state) */}
+                        <Image
+                            source={refreshing ? require('../assets/bear_awake.png') : require('../assets/bear_sleep.png')}
+                            style={{ width: 100, height: 80, resizeMode: 'contain' }}
+                        />
+                    </View>
+                </View>
 
                 {/* Score Card */}
                 <View style={styles.scoreCardContainer}>

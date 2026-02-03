@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Dimensions, StatusBar, Platform, ScrollView, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Dimensions, StatusBar, Platform, ScrollView, TextInput, ActivityIndicator, TouchableWithoutFeedback, Keyboard, KeyboardAvoidingView } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, AntDesign } from '@expo/vector-icons';
@@ -68,51 +68,58 @@ const WelcomeScreen = ({ navigation }) => {
             {/* Auth Modal */}
             {authMode && (
                 <View style={styles.authOverlay}>
-                    <View style={styles.authModal}>
-                        <TouchableOpacity style={styles.closeButton} onPress={() => setAuthMode(null)}>
-                            <Ionicons name="close" size={24} color="white" />
-                        </TouchableOpacity>
+                    <KeyboardAvoidingView
+                        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                        style={{ flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' }}
+                    >
+                        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+                            <View style={styles.authModal}>
+                                <TouchableOpacity style={styles.closeButton} onPress={() => setAuthMode(null)}>
+                                    <Ionicons name="close" size={24} color="white" />
+                                </TouchableOpacity>
 
-                        <Text style={styles.authTitle}>
-                            {authMode === 'login' ? t('welcome_login') : t('welcome_create_account')}
-                        </Text>
-
-                        <View style={styles.inputContainer}>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Email"
-                                placeholderTextColor="#9CA3AF"
-                                autoCapitalize="none"
-                                value={email}
-                                onChangeText={setEmail}
-                            />
-                        </View>
-
-                        <View style={styles.inputContainer}>
-                            <TextInput
-                                style={styles.input}
-                                placeholder="Password"
-                                placeholderTextColor="#9CA3AF"
-                                secureTextEntry
-                                value={password}
-                                onChangeText={setPassword}
-                            />
-                        </View>
-
-                        <TouchableOpacity
-                            style={styles.authButton}
-                            onPress={handleAuth}
-                            disabled={loading}
-                        >
-                            {loading ? (
-                                <ActivityIndicator color="white" />
-                            ) : (
-                                <Text style={styles.authButtonText}>
+                                <Text style={styles.authTitle}>
                                     {authMode === 'login' ? t('welcome_login') : t('welcome_create_account')}
                                 </Text>
-                            )}
-                        </TouchableOpacity>
-                    </View>
+
+                                <View style={styles.inputContainer}>
+                                    <TextInput
+                                        style={styles.input}
+                                        placeholder="Email"
+                                        placeholderTextColor="#9CA3AF"
+                                        autoCapitalize="none"
+                                        value={email}
+                                        onChangeText={setEmail}
+                                    />
+                                </View>
+
+                                <View style={styles.inputContainer}>
+                                    <TextInput
+                                        style={styles.input}
+                                        placeholder="Password"
+                                        placeholderTextColor="#9CA3AF"
+                                        secureTextEntry
+                                        value={password}
+                                        onChangeText={setPassword}
+                                    />
+                                </View>
+
+                                <TouchableOpacity
+                                    style={styles.authButton}
+                                    onPress={handleAuth}
+                                    disabled={loading}
+                                >
+                                    {loading ? (
+                                        <ActivityIndicator color="white" />
+                                    ) : (
+                                        <Text style={styles.authButtonText}>
+                                            {authMode === 'login' ? t('welcome_login') : t('welcome_create_account')}
+                                        </Text>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+                        </TouchableWithoutFeedback>
+                    </KeyboardAvoidingView>
                 </View>
             )}
 

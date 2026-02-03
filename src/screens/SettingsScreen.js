@@ -1,12 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Image, Modal, Alert, Platform, Linking, Dimensions, TextInput, KeyboardAvoidingView, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Image, Modal, Alert, Platform, Linking, Dimensions, TextInput, KeyboardAvoidingView, ActivityIndicator, TouchableWithoutFeedback, Keyboard, RefreshControl, Animated, Easing } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { MaterialIcons, MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as Notifications from 'expo-notifications';
 import { useUser } from '../context/UserContext';
+import CustomAlert from '../components/CustomAlert';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // --- Circular Progress Component (No SVG required) ---
 const CircularProgress = ({ size = 140, strokeWidth = 6, progress = 0, color = '#7f13ec', emptyColor = 'rgba(255,255,255,0.1)', children }) => {
@@ -111,18 +115,92 @@ const PropyleProgress = ({ size = 140, percentage = 0, color = '#7f13ec' }) => {
 
 const { width } = Dimensions.get('window');
 
-const SettingsScreen = ({ navigation }) => {
-    const { credits, addCredits, isBiometricEnabled, toggleBiometric, t, language, changeLanguage, logout, user, profile, updateProfile } = useUser();
+const SettingsScreen = ({ navigation, route }) => {
+    const { credits, addCredits, isBiometricEnabled, toggleBiometric, t, language, changeLanguage, logout, user, profile, updateProfile, deleteAccount, isProfileComplete, completionPercentage, fetchProfile } = useUser();
+
+    // Auto-open Edit Profile if requested via navigation
+    useFocusEffect(
+        useCallback(() => {
+            if (route.params?.openProfile) {
+                setEditProfileVisible(true);
+                // Clear the param
+                navigation.setParams({ openProfile: undefined });
+            }
+        }, [route.params])
+    );
     const [notificationsEnabled, setNotificationsEnabled] = useState(true);
     const [isLanguageModalVisible, setLanguageModalVisible] = useState(false);
     const [isPrivacyModalVisible, setPrivacyModalVisible] = useState(false);
 
+    // Refresh Logic
+    const [refreshing, setRefreshing] = useState(false);
+    const spinValue = React.useRef(new Animated.Value(0)).current;
+
+    const startSpin = () => {
+        spinValue.setValue(0);
+        Animated.loop(
+            Animated.timing(spinValue, {
+                toValue: 1,
+                duration: 1000,
+                easing: Easing.linear,
+                useNativeDriver: true,
+            })
+        ).start();
+    };
+
+    const stopSpin = () => {
+        spinValue.stopAnimation();
+    };
+
+    const spin = spinValue.interpolate({
+        inputRange: [0, 1],
+        outputRange: ['0deg', '360deg'],
+    });
+
+    const onRefresh = React.useCallback(async () => {
+        if (!user) return;
+        setRefreshing(true);
+        startSpin();
+        try {
+            await fetchProfile(user.id);
+        } catch (e) {
+            console.error(e);
+        } finally {
+            // UX delay
+            setTimeout(() => {
+                setRefreshing(false);
+                stopSpin();
+            }, 500);
+        }
+    }, [user, fetchProfile]);
+
+    // Custom Alert State
+    const [alertConfig, setAlertConfig] = useState({
+        visible: false,
+        title: '',
+        message: '',
+        buttons: []
+    });
+
+    const showAlert = (title, message, buttons = []) => {
+        setAlertConfig({
+            visible: true,
+            title,
+            message,
+            buttons: buttons.length > 0 ? buttons : [{ text: 'OK', onPress: () => setAlertConfig(prev => ({ ...prev, visible: false })) }]
+        });
+    };
+
+    const closeAlert = () => {
+        setAlertConfig(prev => ({ ...prev, visible: false }));
+    };
+
     const handleDeleteAllData = () => {
-        Alert.alert(
+        showAlert(
             t('delete_all_data_title') || 'Tüm Verileri Sil',
-            t('delete_all_data_confirm') || 'Tüm rüya geçmişiniz ve notlarınız kalıcı olarak silinecek. Emin misiniz?',
+            t('delete_all_data_confirm') || 'Tüm rüya geçmişiniz ve notlarınız cihazınızdan silinecek. Bu işlem geri alınamaz. Emin misiniz?',
             [
-                { text: t('cancel'), style: 'cancel' },
+                { text: t('cancel'), style: 'cancel', onPress: closeAlert },
                 {
                     text: t('delete'),
                     style: 'destructive',
@@ -130,10 +208,17 @@ const SettingsScreen = ({ navigation }) => {
                         try {
                             await AsyncStorage.removeItem('user_dreams_history');
                             await AsyncStorage.removeItem('dream_notes');
-                            Alert.alert(t('success'), t('data_deleted') || 'Veriler silindi.');
+                            closeAlert(); // Close confirm modal
+                            // Show success modal
+                            setTimeout(() => {
+                                showAlert(t('success'), t('data_deleted') || 'Veriler silindi.');
+                            }, 300);
                         } catch (e) {
                             console.error(e);
-                            Alert.alert(t('error'), 'Silme işlemi başarısız oldu.');
+                            closeAlert();
+                            setTimeout(() => {
+                                showAlert(t('error'), 'Silme işlemi başarısız oldu.');
+                            }, 300);
                         }
                     }
                 }
@@ -192,23 +277,44 @@ const SettingsScreen = ({ navigation }) => {
         setEditProfileVisible(true);
     };
 
+    // Helper to calculate Zodiac Sign
+    const getZodiacSign = (date) => {
+        const day = date.getDate();
+        const month = date.getMonth() + 1;
+
+        if ((month == 1 && day >= 20) || (month == 2 && day <= 18)) return "aquarius";
+        if ((month == 2 && day >= 19) || (month == 3 && day <= 20)) return "pisces";
+        if ((month == 3 && day >= 21) || (month == 4 && day <= 19)) return "aries";
+        if ((month == 4 && day >= 20) || (month == 5 && day <= 20)) return "taurus";
+        if ((month == 5 && day >= 21) || (month == 6 && day <= 20)) return "gemini";
+        if ((month == 6 && day >= 21) || (month == 7 && day <= 22)) return "cancer";
+        if ((month == 7 && day >= 23) || (month == 8 && day <= 22)) return "leo";
+        if ((month == 8 && day >= 23) || (month == 9 && day <= 22)) return "virgo";
+        if ((month == 9 && day >= 23) || (month == 10 && day <= 22)) return "libra";
+        if ((month == 10 && day >= 23) || (month == 11 && day <= 21)) return "scorpio";
+        if ((month == 11 && day >= 22) || (month == 12 && day <= 21)) return "sagittarius";
+        return "capricorn"; // Dec 22 - Jan 19
+    };
+
     const handleSaveProfile = async () => {
         if (isSaving) return;
 
         setIsSaving(true);
         try {
+            const zodiac = getZodiacSign(editDate);
             await updateProfile({
                 full_name: editName,
                 birth_date: editDate.toISOString().split('T')[0],
                 gender: editGender,
                 marital_status: editMarital,
-                job: editJob
+                job: editJob,
+                zodiac_sign: zodiac
             });
-            Alert.alert(t('success'), t('profile_updated') || 'Profil güncellendi!');
+            showAlert(t('success'), t('profile_updated') || 'Profil güncellendi!');
             setEditProfileVisible(false);
         } catch (error) {
             console.error(error);
-            Alert.alert(t('error'), 'Error updating profile');
+            showAlert(t('error'), 'Error updating profile');
         } finally {
             setIsSaving(false);
         }
@@ -217,7 +323,14 @@ const SettingsScreen = ({ navigation }) => {
     const pickImage = async () => {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (status !== 'granted') {
-            alert(t('permission_denied') || 'Sorry, we need camera roll permissions to make this work!');
+            showAlert(
+                language === 'tr' ? 'İzin Gerekli' : 'Permission Required',
+                language === 'tr' ? 'Profil fotoğrafını değiştirmek için galeri iznine ihtiyacımız var.' : 'We need camera roll permissions to change your profile photo.',
+                [
+                    { text: language === 'tr' ? 'İptal' : 'Cancel', style: 'cancel', onPress: closeAlert },
+                    { text: language === 'tr' ? 'Ayarlara Git' : 'Go to Settings', onPress: () => Linking.openSettings() }
+                ]
+            );
             return;
         }
 
@@ -230,15 +343,22 @@ const SettingsScreen = ({ navigation }) => {
         });
 
         if (!result.canceled) {
+            // Compress and Resize
+            const manipResult = await ImageManipulator.manipulateAsync(
+                result.assets[0].uri,
+                [{ resize: { width: 500 } }], // Resize to 500px width (auto height)
+                { compress: 0.5, format: ImageManipulator.SaveFormat.JPEG, base64: true }
+            );
+
             // Base64 olarak kaydet
-            const base64Img = `data:image/jpeg;base64,${result.assets[0].base64}`;
+            const base64Img = `data:image/jpeg;base64,${manipResult.base64}`;
 
             try {
                 await updateProfile({ avatar_url: base64Img });
-                alert(t('success') || 'Profile updated!');
+                showAlert(t('success') || 'Profile updated!');
             } catch (error) {
                 console.error(error);
-                alert('Error updating profile picture');
+                showAlert('Error updating profile picture');
             }
         }
     };
@@ -255,9 +375,10 @@ const SettingsScreen = ({ navigation }) => {
     const handleLogout = async () => {
         try {
             await logout();
+
         } catch (error) {
             console.error('Logout error:', error);
-            Alert.alert(t('error'), 'Unexpected error during logout');
+            showAlert(t('error'), 'Unexpected error during logout');
         }
     };
 
@@ -293,9 +414,10 @@ const SettingsScreen = ({ navigation }) => {
             // Ancak basitlik adına burada console log basıp, saveReminder'da özel alert gösterelim.
             console.log(`Hatırlatıcı ${time.getHours()}:${time.getMinutes()} kuruldu.`);
 
+
         } catch (error) {
             console.log(error);
-            Alert.alert(t('error'), t('notification_schedule_error') + error.message);
+            showAlert(t('error'), t('notification_schedule_error') + error.message);
         }
     };
 
@@ -303,7 +425,7 @@ const SettingsScreen = ({ navigation }) => {
         if (value) {
             const { status } = await Notifications.requestPermissionsAsync();
             if (status !== 'granted') {
-                Alert.alert(t('error'), t('notification_permission_denied'));
+                showAlert(t('error'), t('notification_permission_denied'));
                 setIsReminderActive(false);
                 return;
             }
@@ -329,7 +451,7 @@ const SettingsScreen = ({ navigation }) => {
     const saveReminder = () => {
         scheduleNotification(reminderTime);
         setShowTimePicker(false);
-        Alert.alert(
+        showAlert(
             t('success'),
             t('reminder_set_message', {
                 hour: reminderTime.getHours().toString().padStart(2, '0'),
@@ -344,14 +466,14 @@ const SettingsScreen = ({ navigation }) => {
                 // 1. Donanım Kontrolü
                 const hasHardware = await LocalAuthentication.hasHardwareAsync();
                 if (!hasHardware) {
-                    alert(t('biometric_no_hardware'));
+                    showAlert(t('biometric_no_hardware'));
                     return;
                 }
 
                 // 2. Kayıt Kontrolü (FaceID/TouchID tanımlı mı?)
                 const isEnrolled = await LocalAuthentication.isEnrolledAsync();
                 if (!isEnrolled) {
-                    alert(t('biometric_not_enrolled'));
+                    showAlert(t('biometric_not_enrolled'));
                     return;
                 }
 
@@ -364,16 +486,16 @@ const SettingsScreen = ({ navigation }) => {
 
                 if (result.success) {
                     toggleBiometric(true);
-                    alert(t('biometric_activated_success'));
+                    showAlert(t('biometric_activated_success'));
                 } else {
                     // Hata detayını göster (alert içinde)
                     if (result.error !== 'user_cancel') {
-                        alert(`${t('authentication_failed')}: ${result.error || t('unknown_error')}`);
+                        showAlert(`${t('authentication_failed')}: ${result.error || t('unknown_error')}`);
                     }
                 }
             } catch (error) {
-                alert(`${t('an_error_occurred')}: ${error.message}`);
-                console.error(error);
+                console.error("Biometric Error:", error);
+                showAlert(`${t('an_error_occurred')}: ${error.message}`);
             }
         } else {
             // Kapatıyor
@@ -385,8 +507,7 @@ const SettingsScreen = ({ navigation }) => {
         <TouchableOpacity
             style={styles.listItem}
             activeOpacity={0.7}
-            disabled={type === 'switch'} // Switch ise satıra tıklanmasın, switch'e tıklansın (veya ikisi de)
-            onPress={onPress}
+            onPress={type === 'switch' ? () => onValueChange && onValueChange(!value) : onPress}
         >
             <View style={[styles.iconContainer, { backgroundColor: `rgba(${color}, 0.1)` }]}>
                 <MaterialIcons name={icon} size={20} color={`rgb(${color})`} />
@@ -430,11 +551,49 @@ const SettingsScreen = ({ navigation }) => {
             />
 
             {/* Header */}
-            <View style={styles.header}>
+            <View style={[styles.header, { zIndex: 100, elevation: 100, backgroundColor: '#191022' }]}>
                 <Text style={styles.headerTitle}>{t('settings')}</Text>
             </View>
 
-            <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+            <ScrollView
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+                overflow="visible"
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        tintColor="transparent"
+                        colors={['transparent']}
+                        style={{ backgroundColor: 'transparent', zIndex: 100 }}
+                    />
+                }
+            >
+                {/* Custom Bear Refresher (Moves with scroll) */}
+                <View style={{ position: 'absolute', top: -150, left: 0, right: 0, height: 140, alignItems: 'center', justifyContent: 'flex-end', zIndex: 10 }}>
+                    <View style={{ alignItems: 'center', justifyContent: 'center', transform: [{ translateY: 5 }] }}>
+                        {/* Spinning Stars */}
+                        <Animated.View style={{
+                            position: 'absolute',
+                            width: 140,
+                            height: 140,
+                            justifyContent: 'center',
+                            alignItems: 'center',
+                            transform: [{ rotate: spin }],
+                            opacity: refreshing ? 1 : 0
+                        }}>
+                            <Ionicons name="star" size={18} color="#FCD34D" style={{ position: 'absolute', top: 10 }} />
+                            <Ionicons name="star" size={12} color="#FCD34D" style={{ position: 'absolute', bottom: 30, right: 30 }} />
+                            <Ionicons name="star" size={15} color="#FCD34D" style={{ position: 'absolute', bottom: 30, left: 30 }} />
+                        </Animated.View>
+
+                        {/* Bear Image (Swap based on state) */}
+                        <Image
+                            source={refreshing ? require('../assets/bear_awake.png') : require('../assets/bear_sleep.png')}
+                            style={{ width: 100, height: 80, resizeMode: 'contain' }}
+                        />
+                    </View>
+                </View>
 
                 {/* Profile Header */}
                 {/* Profile Header - Premium Redesign */}
@@ -460,7 +619,12 @@ const SettingsScreen = ({ navigation }) => {
 
                             <View style={styles.avatarInnerContainer}>
                                 <Image
-                                    source={{ uri: profile?.avatar_url || 'https://lh3.googleusercontent.com/aida-public/AB6AXuCXuO__OObJsFp8qm6OoJWkKNiOwhZDsQ4T_prwU9gRzHAgiirx5aRticY9bENq4Jjksje2zER-bGkY9Zd36hRV1oCTxB6P5RJzvdbPPy94cYvHNXxnSVc079wpHa-YMK0X79OjV6GvS5rGgXNlkKNR2hMvwfZTMldCodUIico2FsJn6eqvXB1FWphP74GV--PrLO9AtfBB982VpKdsDFQeOJ8vfMXa9WU_M6nq_rCXbZm6f0dGMokTj4UfF97viP_5ecKtTryLUi8' }}
+                                    source={
+                                        profile?.avatar_url === 'avatar_male' ? require('../../assets/avatars/avatar_male.png') :
+                                            profile?.avatar_url === 'avatar_female' ? require('../../assets/avatars/avatar_female.png') :
+                                                profile?.avatar_url === 'avatar_other' ? require('../../assets/avatars/avatar_other.png') :
+                                                    { uri: profile?.avatar_url || 'https://lh3.googleusercontent.com/aida-public/AB6AXuCXuO__OObJsFp8qm6OoJWkKNiOwhZDsQ4T_prwU9gRzHAgiirx5aRticY9bENq4Jjksje2zER-bGkY9Zd36hRV1oCTxB6P5RJzvdbPPy94cYvHNXxnSVc079wpHa-YMK0X79OjV6GvS5rGgXNlkKNR2hMvwfZTMldCodUIico2FsJn6eqvXB1FWphP74GV--PrLO9AtfBB982VpKdsDFQeOJ8vfMXa9WU_M6nq_rCXbZm6f0dGMokTj4UfF97viP_5ecKtTryLUi8' }
+                                    }
                                     style={styles.avatarLarge}
                                 />
                             </View>
@@ -572,7 +736,7 @@ const SettingsScreen = ({ navigation }) => {
                                     activeOpacity={0.8}
                                     onPress={() => {
                                         addCredits(5);
-                                        alert('5 Kredi yüklendi!');
+                                        showAlert('5 Kredi yüklendi!');
                                     }}
                                 >
                                     <MaterialIcons name="add-circle-outline" size={18} color="white" />
@@ -769,137 +933,146 @@ const SettingsScreen = ({ navigation }) => {
                     behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                     style={styles.modalContainer}
                 >
-                    <View style={styles.modalContent}>
-                        <View style={styles.modalHeader}>
-                            <Text style={styles.modalTitle}>{t('personal_info')}</Text>
-                            <TouchableOpacity onPress={() => setEditProfileVisible(false)}>
-                                <MaterialIcons name="close" size={24} color="#fff" />
+                    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+                        <View style={styles.modalContent}>
+                            <View style={styles.modalHeader}>
+                                <Text style={styles.modalTitle}>{t('personal_info')}</Text>
+                                <TouchableOpacity onPress={() => setEditProfileVisible(false)}>
+                                    <MaterialIcons name="close" size={24} color="#fff" />
+                                </TouchableOpacity>
+                            </View>
+
+                            <Text style={styles.inputLabel}>{t('onboarding_name_label') || 'Name'}</Text>
+                            <TextInput
+                                style={styles.input}
+                                value={editName}
+                                onChangeText={setEditName}
+                                placeholderTextColor="#666"
+                            />
+
+                            <Text style={styles.inputLabel}>{t('onboarding_date_label') || 'Birth Date'}</Text>
+                            <TouchableOpacity
+                                style={styles.dateButton}
+                                onPress={() => {
+                                    Keyboard.dismiss();
+                                    setShowEditDatePicker(!showEditDatePicker);
+                                }}
+                            >
+                                <Text style={styles.dateButtonText}>
+                                    {editDate.toLocaleDateString(language === 'en' ? 'en-US' : 'tr-TR', { year: 'numeric', month: 'long', day: 'numeric' })}
+                                </Text>
+                                <MaterialIcons name="calendar-today" size={20} color="#d8b4fe" />
+                            </TouchableOpacity>
+
+                            {showEditDatePicker && (
+                                <DateTimePicker
+                                    value={editDate}
+                                    mode="date"
+                                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                    onChange={(event, selectedDate) => {
+                                        setShowEditDatePicker(Platform.OS === 'ios');
+                                        if (selectedDate) setEditDate(selectedDate);
+                                    }}
+                                    maximumDate={new Date()}
+                                    locale={language === 'tr' ? 'tr-TR' : 'en-US'}
+                                    textColor="white"
+                                    themeVariant="dark"
+                                />
+                            )}
+
+                            <Text style={styles.inputLabel}>{t('label_gender')}</Text>
+                            <View style={styles.selectionRow}>
+                                {['male', 'female', 'other'].map(g => (
+                                    <TouchableOpacity
+                                        key={g}
+                                        style={[styles.selectionButton, editGender === g && styles.selectionButtonActive]}
+                                        onPress={() => {
+                                            Keyboard.dismiss();
+                                            setEditGender(g);
+                                        }}
+                                    >
+                                        <Text style={[styles.selectionText, editGender === g && styles.selectionTextActive]}>{t(`gender_${g}`)}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+
+                            <Text style={styles.inputLabel}>{t('label_marital')}</Text>
+                            <View style={[styles.selectionRow, { flexWrap: 'wrap' }]}>
+                                {['single', 'relationship', 'married', 'divorced'].map(s => (
+                                    <TouchableOpacity
+                                        key={s}
+                                        style={[
+                                            styles.selectionButton,
+                                            editMarital === s && styles.selectionButtonActive,
+                                            { minWidth: '44%' } // Force 2 columns (gap handles spacing)
+                                        ]}
+                                        onPress={() => {
+                                            Keyboard.dismiss();
+                                            setEditMarital(s);
+                                        }}
+                                    >
+                                        <Text
+                                            style={[
+                                                styles.selectionText,
+                                                editMarital === s && styles.selectionTextActive,
+                                                { textAlign: 'center', fontSize: 11 } // Smaller font for really long texts
+                                            ]}
+                                            numberOfLines={2}
+                                        >
+                                            {t(`marital_${s}`)}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+
+                            <Text style={styles.inputLabel}>{t('label_job')}</Text>
+                            <TextInput
+                                style={[styles.input, { marginBottom: 12 }]}
+                                value={editJob}
+                                onChangeText={setEditJob}
+                                placeholder={t('job_placeholder')}
+                                placeholderTextColor="#666"
+                            />
+                            <View style={{ height: 50 }}>
+                                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 20 }}>
+                                    {['student', 'education', 'health', 'engineer', 'freelance', 'retired', 'unemployed'].map(jobKey => {
+                                        const jobLabel = t(`job_${jobKey}`);
+                                        const isSelected = editJob === jobLabel;
+                                        return (
+                                            <TouchableOpacity
+                                                key={jobKey}
+                                                style={[styles.chip, isSelected && styles.chipActive]}
+                                                onPress={() => {
+                                                    Keyboard.dismiss();
+                                                    setEditJob(jobLabel);
+                                                }}
+                                            >
+                                                <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>{jobLabel}</Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </ScrollView>
+                            </View>
+
+                            <TouchableOpacity
+                                style={[styles.saveButton, isSaving && { opacity: 0.7 }]}
+                                onPress={handleSaveProfile}
+                                disabled={isSaving}
+                            >
+                                {isSaving ? (
+                                    <ActivityIndicator color="white" />
+                                ) : (
+                                    <Text style={styles.saveButtonText}>{t('save')}</Text>
+                                )}
                             </TouchableOpacity>
                         </View>
-
-                        <Text style={styles.inputLabel}>{t('onboarding_name_label') || 'Name'}</Text>
-                        <TextInput
-                            style={styles.input}
-                            value={editName}
-                            onChangeText={setEditName}
-                            placeholderTextColor="#666"
-                        />
-
-                        <Text style={styles.inputLabel}>{t('onboarding_date_label') || 'Birth Date'}</Text>
-                        <TouchableOpacity
-                            style={styles.dateButton}
-                            onPress={() => setShowEditDatePicker(!showEditDatePicker)}
-                        >
-                            <Text style={styles.dateButtonText}>
-                                {editDate.toLocaleDateString(language === 'en' ? 'en-US' : 'tr-TR', { year: 'numeric', month: 'long', day: 'numeric' })}
-                            </Text>
-                            <MaterialIcons name="calendar-today" size={20} color="#d8b4fe" />
-                        </TouchableOpacity>
-
-                        {showEditDatePicker && (
-                            <DateTimePicker
-                                value={editDate}
-                                mode="date"
-                                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                                onChange={(event, selectedDate) => {
-                                    setShowEditDatePicker(Platform.OS === 'ios');
-                                    if (selectedDate) setEditDate(selectedDate);
-                                }}
-                                maximumDate={new Date()}
-                                locale={language === 'tr' ? 'tr-TR' : 'en-US'}
-                                textColor="white"
-                                themeVariant="dark"
-                            />
-                        )}
-
-                        <Text style={styles.inputLabel}>{t('label_gender')}</Text>
-                        <View style={styles.selectionRow}>
-                            {['male', 'female', 'other'].map(g => (
-                                <TouchableOpacity
-                                    key={g}
-                                    style={[styles.selectionButton, editGender === g && styles.selectionButtonActive]}
-                                    onPress={() => setEditGender(g)}
-                                >
-                                    <Text style={[styles.selectionText, editGender === g && styles.selectionTextActive]}>{t(`gender_${g}`)}</Text>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
-
-                        <Text style={styles.inputLabel}>{t('label_marital')}</Text>
-                        <View style={[styles.selectionRow, { flexWrap: 'wrap' }]}>
-                            {['single', 'relationship', 'married', 'divorced'].map(s => (
-                                <TouchableOpacity
-                                    key={s}
-                                    style={[
-                                        styles.selectionButton,
-                                        editMarital === s && styles.selectionButtonActive,
-                                        { minWidth: '44%' } // Force 2 columns (gap handles spacing)
-                                    ]}
-                                    onPress={() => setEditMarital(s)}
-                                >
-                                    <Text
-                                        style={[
-                                            styles.selectionText,
-                                            editMarital === s && styles.selectionTextActive,
-                                            { textAlign: 'center', fontSize: 11 } // Smaller font for really long texts
-                                        ]}
-                                        numberOfLines={2}
-                                    >
-                                        {t(`marital_${s}`)}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
-
-                        <Text style={styles.inputLabel}>{t('label_job')}</Text>
-                        <TextInput
-                            style={[styles.input, { marginBottom: 12 }]}
-                            value={editJob}
-                            onChangeText={setEditJob}
-                            placeholder={t('job_placeholder')}
-                            placeholderTextColor="#666"
-                        />
-                        <View style={{ height: 50 }}>
-                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: 20 }}>
-                                {['student', 'education', 'health', 'engineer', 'freelance', 'retired', 'unemployed'].map(jobKey => {
-                                    const jobLabel = t(`job_${jobKey}`);
-                                    const isSelected = editJob === jobLabel;
-                                    return (
-                                        <TouchableOpacity
-                                            key={jobKey}
-                                            style={[styles.chip, isSelected && styles.chipActive]}
-                                            onPress={() => setEditJob(jobLabel)}
-                                        >
-                                            <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>{jobLabel}</Text>
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                            </ScrollView>
-                        </View>
-
-                        <TouchableOpacity
-                            style={[styles.saveButton, isSaving && { opacity: 0.7 }]}
-                            onPress={handleSaveProfile}
-                            disabled={isSaving}
-                        >
-                            {isSaving ? (
-                                <ActivityIndicator color="white" />
-                            ) : (
-                                <Text style={styles.saveButtonText}>{t('save')}</Text>
-                            )}
-                        </TouchableOpacity>
-                    </View>
+                    </TouchableWithoutFeedback>
                 </KeyboardAvoidingView>
             </Modal>
 
-            <Modal
-                animationType="slide"
-                transparent={true}
-                visible={isPrivacyModalVisible}
-                onRequestClose={() => setPrivacyModalVisible(false)}
-            >
-                <View style={styles.modalContainer}>
-                    <View style={styles.modalContent}>
+            {isPrivacyModalVisible && (
+                <View style={[styles.modalContainer, StyleSheet.absoluteFill, { zIndex: 50 }]}>
+                    <View style={[styles.modalContent, { marginTop: 'auto' }]}>
                         <View style={styles.modalHeader}>
                             <Text style={styles.modalTitle}>{t('privacy_settings')}</Text>
                             <TouchableOpacity onPress={() => setPrivacyModalVisible(false)}>
@@ -921,18 +1094,61 @@ const SettingsScreen = ({ navigation }) => {
                             </View>
                         </View>
 
-
                         <View style={[styles.card, { marginTop: 16 }]}>
+                            {/* Delete Local Data */}
                             <TouchableOpacity
                                 style={[styles.cardItem, { padding: 16, flexDirection: 'row', alignItems: 'center' }]}
                                 onPress={handleDeleteAllData}
+                            >
+                                <View style={[styles.iconContainer, { backgroundColor: 'rgba(234, 179, 8, 0.1)' }]}>
+                                    <MaterialIcons name="cleaning-services" size={20} color="#EAB308" />
+                                </View>
+                                <View style={{ marginLeft: 16, flex: 1 }}>
+                                    <Text style={[styles.listItemTitle, { color: '#EAB308' }]}>{t('delete_all_data') || 'Önbelleği Temizle'}</Text>
+                                    <Text style={styles.listItemSubtitle}>{t('delete_all_data_desc')}</Text>
+                                </View>
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={[styles.card, { marginTop: 16 }]}>
+                            {/* Delete Account (Critical) */}
+                            <TouchableOpacity
+                                style={[styles.cardItem, { padding: 16, flexDirection: 'row', alignItems: 'center' }]}
+                                onPress={() => {
+                                    showAlert(
+                                        t('delete_account_title'),
+                                        t('delete_account_confirm'),
+                                        [
+                                            { text: t('cancel'), style: 'cancel', onPress: closeAlert },
+                                            {
+                                                text: t('delete'),
+                                                style: 'destructive',
+                                                onPress: async () => {
+                                                    const result = await deleteAccount();
+                                                    if (result.success) {
+                                                        closeAlert();
+                                                        setTimeout(() => {
+                                                            showAlert(t('success'), t('delete_account_success'));
+                                                            navigation.navigate('Welcome');
+                                                        }, 300);
+                                                    } else {
+                                                        closeAlert();
+                                                        setTimeout(() => {
+                                                            showAlert(t('error') + ': ' + result.error.message);
+                                                        }, 300);
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    );
+                                }}
                             >
                                 <View style={[styles.iconContainer, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
                                     <MaterialIcons name="delete-forever" size={20} color="#EF4444" />
                                 </View>
                                 <View style={{ marginLeft: 16, flex: 1 }}>
-                                    <Text style={[styles.listItemTitle, { color: '#EF4444' }]}>{t('delete_all_data') || 'Tüm Verileri Sil'}</Text>
-                                    <Text style={styles.listItemSubtitle}>{t('delete_all_data_desc') || 'Bu işlem geri alınamaz'}</Text>
+                                    <Text style={[styles.listItemTitle, { color: '#EF4444' }]}>{t('delete_account_title')}</Text>
+                                    <Text style={styles.listItemSubtitle}>{t('delete_account_desc')}</Text>
                                 </View>
                             </TouchableOpacity>
                         </View>
@@ -943,7 +1159,16 @@ const SettingsScreen = ({ navigation }) => {
                         </TouchableOpacity>
                     </View>
                 </View>
-            </Modal >
+            )}
+
+            {/* Custom Alert Component */}
+            <CustomAlert
+                visible={alertConfig.visible}
+                title={alertConfig.title}
+                message={alertConfig.message}
+                buttons={alertConfig.buttons}
+                onClose={closeAlert}
+            />
         </View >
     );
 };

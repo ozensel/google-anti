@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Dimensions, ImageBackground, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Dimensions, ImageBackground, Modal, RefreshControl, Animated, Easing } from 'react-native';
 import { MaterialIcons, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
+import CreditBalanceButton from '../components/CreditBalanceButton';
 
 import { useUser } from '../context/UserContext';
 import ProfileAvatar from '../components/ProfileAvatar';
@@ -15,6 +16,40 @@ const HomeScreen = ({ navigation }) => {
     const { t, profile, user } = useUser();
     const [greeting, setGreeting] = useState('');
     const [recentDreams, setRecentDreams] = useState([]);
+    const [refreshing, setRefreshing] = useState(false);
+    const spinValue = React.useRef(new Animated.Value(0)).current;
+
+    const startSpin = () => {
+        spinValue.setValue(0);
+        Animated.loop(
+            Animated.timing(spinValue, {
+                toValue: 1,
+                duration: 1000,
+                easing: Easing.linear,
+                useNativeDriver: true,
+            })
+        ).start();
+    };
+
+    const stopSpin = () => {
+        spinValue.stopAnimation();
+    };
+
+    const spin = spinValue.interpolate({
+        inputRange: [0, 1],
+        outputRange: ['0deg', '360deg'],
+    });
+
+    const onRefresh = React.useCallback(async () => {
+        setRefreshing(true);
+        startSpin();
+        await fetchRecentDreams();
+        // Simulate a small delay if fetch is too fast, for UX
+        setTimeout(() => {
+            setRefreshing(false);
+            stopSpin();
+        }, 500);
+    }, [user]);
 
     useEffect(() => {
         const hour = new Date().getHours();
@@ -41,17 +76,20 @@ const HomeScreen = ({ navigation }) => {
     );
 
     const fetchRecentDreams = async () => {
+        if (!user) return;
         try {
-            const jsonValue = await AsyncStorage.getItem('user_dreams_history');
-            const data = jsonValue != null ? JSON.parse(jsonValue) : [];
+            const { data, error } = await supabase
+                .from('dreams')
+                .select('*')
+                .eq('user_id', user.id)
+                .order('date', { ascending: false })
+                .limit(2);
 
-            // Filter by user if storage is shared (unlikely based on simple key, but safe practice)
-            // Actually, HistoryScreen verifies it's local only. 
-            // If multi-user support is needed on same device, keys should include userId.
-            // For now, matching HistoryScreen logic:
-
-            const sortedData = data.sort((a, b) => new Date(b.date) - new Date(a.date));
-            setRecentDreams(sortedData.slice(0, 2));
+            if (error) {
+                console.error('Error fetching recent dreams:', error);
+                return;
+            }
+            setRecentDreams(data || []);
         } catch (error) {
             console.error('Error fetching recent dreams:', error);
         }
@@ -128,18 +166,62 @@ const HomeScreen = ({ navigation }) => {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <View style={styles.header}>
-                <View>
-                    <Text style={styles.greetingText}>{greeting},</Text>
-                    <Text style={styles.userName}>{profile?.full_name || t('hello_user')}</Text>
+            {/* Header */}
+            {/* Header */}
+            <View style={[styles.header, { zIndex: 100, elevation: 100, backgroundColor: '#191022' }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <ProfileAvatar
+                        size={48}
+                        onPress={() => navigation.navigate('SettingsTab')}
+                    />
+                    <View>
+                        <Text style={styles.greetingText}>{greeting}</Text>
+                        <Text style={styles.userName}>{profile?.full_name?.split(' ')[0] || t('hello_user')}</Text>
+                    </View>
                 </View>
-                <ProfileAvatar
-                    size={52}
-                    onPress={() => navigation.navigate('SettingsTab')}
-                />
+
+                <CreditBalanceButton dark={true} />
             </View>
 
-            <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+            <ScrollView
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+                overflow="visible"
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        tintColor="transparent"
+                        colors={['transparent']}
+                        style={{ backgroundColor: 'transparent', zIndex: 100 }}
+                    />
+                }
+            >
+                {/* Custom Bear Refresher (Moves with scroll) */}
+                <View style={{ position: 'absolute', top: -150, left: 0, right: 0, height: 140, alignItems: 'center', justifyContent: 'flex-end', zIndex: 10 }}>
+                    <View style={{ alignItems: 'center', justifyContent: 'center', transform: [{ translateY: 5 }] }}>
+                        {/* Spinning Stars */}
+                        <Animated.View style={{
+                            position: 'absolute',
+                            width: 140,
+                            height: 140,
+                            justifyContent: 'center',
+                            alignItems: 'center',
+                            transform: [{ rotate: spin }],
+                            opacity: refreshing ? 1 : 0
+                        }}>
+                            <Ionicons name="star" size={18} color="#FCD34D" style={{ position: 'absolute', top: 10 }} />
+                            <Ionicons name="star" size={12} color="#FCD34D" style={{ position: 'absolute', bottom: 30, right: 30 }} />
+                            <Ionicons name="star" size={15} color="#FCD34D" style={{ position: 'absolute', bottom: 30, left: 30 }} />
+                        </Animated.View>
+
+                        {/* Bear Image (Swap based on state) */}
+                        <Image
+                            source={refreshing ? require('../assets/bear_awake.png') : require('../assets/bear_sleep.png')}
+                            style={{ width: 100, height: 80, resizeMode: 'contain' }}
+                        />
+                    </View>
+                </View>
 
                 {/* Hero Action Card */}
                 <TouchableOpacity
@@ -262,9 +344,27 @@ const HomeScreen = ({ navigation }) => {
                         );
                     })
                 ) : (
-                    <Text style={{ color: '#6B7280', textAlign: 'center', marginTop: 10, marginBottom: 20 }}>
-                        {t('no_recent_dreams') || 'Henüz rüya kaydedilmedi.'}
-                    </Text>
+                    <TouchableOpacity
+                        style={styles.emptyRecentCard}
+                        activeOpacity={0.9}
+                        onPress={() => navigation.navigate('NewDream')}
+                    >
+                        <LinearGradient
+                            colors={['rgba(255,255,255,0.05)', 'rgba(255,255,255,0.02)']}
+                            style={styles.emptyRecentGradient}
+                        >
+                            <View style={styles.emptyIconBox}>
+                                <Ionicons name="moon-outline" size={24} color="#A855F7" />
+                            </View>
+                            <View style={styles.emptyContent}>
+                                <Text style={styles.emptyTitle}>{t('no_dreams_yet') || 'Henüz yorumlanmış bir rüyanız yok'}</Text>
+                                <Text style={styles.emptySubtitle}>
+                                    {t('start_recording_desc') || "Rüyanızı yorumlatmak ister misiniz?"}
+                                </Text>
+                            </View>
+                            <Ionicons name="add-circle-outline" size={28} color="#A855F7" style={{ opacity: 0.8 }} />
+                        </LinearGradient>
+                    </TouchableOpacity>
                 )}
 
             </ScrollView>
@@ -321,15 +421,17 @@ const styles = StyleSheet.create({
         marginBottom: 24,
     },
     greetingText: {
-        color: '#ad92c9',
-        fontSize: 14,
-        fontFamily: 'SplineSans_500Medium',
+        color: '#D8B4FE',
+        fontSize: 11,
+        fontFamily: 'SplineSans_600SemiBold',
+        textTransform: 'uppercase',
+        letterSpacing: 1,
+        marginBottom: 2
     },
     userName: {
         color: 'white',
-        fontSize: 24,
+        fontSize: 19,
         fontFamily: 'SplineSans_700Bold',
-        marginTop: 2,
     },
     profileButton: {
         padding: 2,
@@ -662,6 +764,45 @@ const styles = StyleSheet.create({
         color: '#9CA3AF',
         fontSize: 12,
         fontFamily: 'SplineSans_400Regular',
+    },
+    // Empty State Syles
+    emptyRecentCard: {
+        marginHorizontal: 20,
+        marginBottom: 24,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.05)',
+        borderStyle: 'dashed',
+        overflow: 'hidden',
+    },
+    emptyRecentGradient: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 16,
+        gap: 16,
+    },
+    emptyIconBox: {
+        width: 48,
+        height: 48,
+        borderRadius: 12,
+        backgroundColor: 'rgba(168, 85, 247, 0.1)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    emptyContent: {
+        flex: 1,
+    },
+    emptyTitle: {
+        color: '#E9D5FF',
+        fontSize: 15,
+        fontFamily: 'SplineSans_600SemiBold',
+        marginBottom: 4,
+    },
+    emptySubtitle: {
+        color: '#9CA3AF',
+        fontSize: 12,
+        fontFamily: 'SplineSans_400Regular',
+        lineHeight: 18,
     },
 });
 

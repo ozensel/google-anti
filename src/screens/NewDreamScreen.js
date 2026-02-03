@@ -1,24 +1,59 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, Dimensions, Platform, ActivityIndicator, Alert, Modal, KeyboardAvoidingView } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Image, Dimensions, Platform, ActivityIndicator, Alert, Modal, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialIcons, Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useUser } from '../context/UserContext';
 import Voice from '@react-native-voice/voice';
+import CustomAlert from '../components/CustomAlert';
 import { useFocusEffect } from '@react-navigation/native';
 
 const { width } = Dimensions.get('window');
 
 const NewDreamScreen = ({ navigation }) => {
-    const { credits, t, useCredit } = useUser(); // useCredit extracted from context
+    const { credits, t, useCredit, isProfileComplete, completionPercentage } = useUser(); // useCredit extracted from context
     const [dreamText, setDreamText] = useState('');
     const [selectedTag, setSelectedTag] = useState('tag_general');
     const [selectedInterpreter, setSelectedInterpreter] = useState('AI');
     const [selectedMood, setSelectedMood] = useState('feeling_neutral');
 
+    // Profile Check
+    useFocusEffect(
+        useCallback(() => {
+            if (completionPercentage < 100) {
+                // Short delay to allow screen transition
+                setTimeout(() => {
+                    setIsProfileModalVisible(true);
+                }, 500);
+            }
+        }, [completionPercentage])
+    );
+
     // Confirm Modal State
     const [isConfirmModalVisible, setIsConfirmModalVisible] = useState(false);
+    const [isProfileModalVisible, setIsProfileModalVisible] = useState(false); // New state for custom modal
+
+    // Custom Alert State
+    const [alertConfig, setAlertConfig] = useState({
+        visible: false,
+        title: '',
+        message: '',
+        buttons: []
+    });
+
+    const showAlert = (title, message, buttons = []) => {
+        setAlertConfig({
+            visible: true,
+            title,
+            message,
+            buttons: buttons.length > 0 ? buttons : [{ text: 'OK', onPress: () => setAlertConfig(prev => ({ ...prev, visible: false })) }]
+        });
+    };
+
+    const closeAlert = () => {
+        setAlertConfig(prev => ({ ...prev, visible: false }));
+    };
 
     // 1. Load draft on mount
     useEffect(() => {
@@ -49,12 +84,12 @@ const NewDreamScreen = ({ navigation }) => {
         const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
 
         if (wordCount < 10) {
-            Alert.alert(t('error'), t('dream_too_short') || 'Rüyanız çok kısa. Lütfen biraz daha detay ekleyin (en az 10 kelime).');
+            showAlert(t('error'), t('dream_too_short') || 'Rüyanız çok kısa. Lütfen biraz daha detay ekleyin (en az 10 kelime).');
             return;
         }
 
         if (credits <= 0) {
-            Alert.alert(t('error'), t('not_enough_credits') || 'Yetersiz kredi');
+            showAlert(t('error'), t('not_enough_credits') || 'Yetersiz kredi');
             return;
         }
         setIsConfirmModalVisible(true);
@@ -78,7 +113,8 @@ const NewDreamScreen = ({ navigation }) => {
 
             setDreamText('');
         } else {
-            Alert.alert(t('error'), t('not_enough_credits'));
+
+            showAlert(t('error'), t('not_enough_credits'));
         }
     };
 
@@ -104,7 +140,7 @@ const NewDreamScreen = ({ navigation }) => {
         function onSpeechError(e) {
             console.log('onSpeechError: ', e);
             setIsListening(false);
-            Alert.alert(t('error'), 'Ses algılama hatası: ' + JSON.stringify(e.error));
+            showAlert(t('error'), 'Ses algılama hatası: ' + JSON.stringify(e.error));
         }
         function onSpeechResults(e) {
             console.log('onSpeechResults: ', e);
@@ -131,7 +167,7 @@ const NewDreamScreen = ({ navigation }) => {
             await Voice.start('tr-TR');
         } catch (e) {
             console.error(e);
-            Alert.alert(t('error'), 'Ses başlatılamadı.');
+            showAlert(t('error'), 'Ses başlatılamadı.');
         }
     };
     const stopRecording = async () => { try { await Voice.stop(); } catch (e) { console.error(e); } };
@@ -148,7 +184,7 @@ const NewDreamScreen = ({ navigation }) => {
         if (newTag.trim().length > 0) {
             const tagToAdd = newTag.trim();
             if (customTags.includes(tagToAdd) || defaultTags.includes(tagToAdd)) {
-                Alert.alert(t('error'), t('tag_exists') || 'Bu etiket zaten var.');
+                showAlert(t('error'), t('tag_exists') || 'Bu etiket zaten var.');
                 return;
             }
             const updatedTags = [tagToAdd, ...customTags];
@@ -162,11 +198,11 @@ const NewDreamScreen = ({ navigation }) => {
 
     const handleDeleteCustomTag = (tag) => {
         if (defaultTags.includes(tag)) return;
-        Alert.alert(
+        showAlert(
             t('delete_tag_title') || 'Etiketi Sil',
             t('delete_tag_confirm') || 'Bu etiketi silmek istediğinize emin misiniz?',
             [
-                { text: t('cancel'), style: 'cancel' },
+                { text: t('cancel'), style: 'cancel', onPress: closeAlert },
                 {
                     text: t('delete'),
                     style: 'destructive',
@@ -174,6 +210,7 @@ const NewDreamScreen = ({ navigation }) => {
                         const updatedTags = customTags.filter(t => t !== tag);
                         setCustomTags(updatedTags);
                         if (selectedTag === tag) setSelectedTag('tag_general');
+                        closeAlert();
                         try { await AsyncStorage.setItem('user_agenda_tags', JSON.stringify(updatedTags)); } catch (error) { console.error('Failed to save custom agenda tags after delete', error); }
                     }
                 }
@@ -212,151 +249,170 @@ const NewDreamScreen = ({ navigation }) => {
                 </View>
             </View>
 
-            <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-                <View style={styles.contentContainer}>
-                    {/* Date */}
-                    <View style={styles.dateContainer}>
-                        <MaterialIcons name="calendar-today" size={14} color="#7f13ec" />
-                        <Text style={styles.dateText}>{t('today')}, {new Date().toLocaleDateString()}</Text>
-                    </View>
+            <ScrollView
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+            >
+                <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+                    <View style={styles.contentContainer}>
+                        {/* Date */}
+                        <View style={styles.dateContainer}>
+                            <MaterialIcons name="calendar-today" size={14} color="#7f13ec" />
+                            <Text style={styles.dateText}>{t('today')}, {new Date().toLocaleDateString()}</Text>
+                        </View>
 
-                    {/* Title */}
-                    <Text style={styles.title}>{t('what_did_you_see')}</Text>
+                        {/* Title */}
+                        <Text style={styles.title}>{t('what_did_you_see')}</Text>
 
-                    {/* Input Area */}
-                    <View style={styles.inputWrapper}>
-                        <LinearGradient
-                            colors={['rgba(127, 19, 236, 0.2)', 'rgba(147, 51, 234, 0.2)']}
-                            style={styles.inputGradient}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 0 }}
-                        />
-                        <View style={styles.inputContainer}>
-                            <TextInput
-                                style={styles.textInput}
-                                placeholder={isListening ? t('listening') || "Dinliyorum..." : t('dream_input_placeholder')}
-                                placeholderTextColor={isListening ? "#D8B4FE" : "rgba(255,255,255,0.4)"}
-                                multiline
-                                textAlignVertical="top"
-                                value={dreamText}
-                                onChangeText={handleTextChange}
-                                editable={!isListening}
+                        {/* Input Area */}
+                        <View style={styles.inputWrapper}>
+                            <LinearGradient
+                                colors={['rgba(127, 19, 236, 0.2)', 'rgba(147, 51, 234, 0.2)']}
+                                style={styles.inputGradient}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 0 }}
                             />
-                            <View style={styles.inputFooter}>
-                                <TouchableOpacity
-                                    style={[styles.micButton, isListening && styles.micButtonActive]}
-                                    onPress={handleVoiceToggle}
-                                >
+                            <View style={styles.inputContainer}>
+                                <TextInput
+                                    style={styles.textInput}
+                                    placeholder={isListening ? t('listening') || "Dinliyorum..." : t('dream_input_placeholder')}
+                                    placeholderTextColor={isListening ? "#D8B4FE" : "rgba(255,255,255,0.4)"}
+                                    multiline
+                                    textAlignVertical="top"
+                                    value={dreamText}
+                                    onChangeText={handleTextChange}
+                                    editable={!isListening}
+                                />
+                                <View style={styles.inputFooter}>
+                                    <TouchableOpacity
+                                        style={[styles.micButton, isListening && styles.micButtonActive]}
+                                        onPress={handleVoiceToggle}
+                                    >
+                                        {isListening ? (
+                                            <Feather name="stop-circle" size={20} color="#EF4444" />
+                                        ) : (
+                                            <Feather name="mic" size={20} color="#9CA3AF" />
+                                        )}
+                                    </TouchableOpacity>
+
                                     {isListening ? (
-                                        <Feather name="stop-circle" size={20} color="#EF4444" />
+                                        <Text style={styles.listeningText}>{t('listening') || "Dinliyorum..."}</Text>
                                     ) : (
-                                        <Feather name="mic" size={20} color="#9CA3AF" />
+                                        <Text style={styles.wordCount}>{t('word_count', { count: dreamText.trim().split(/\s+/).filter(w => w.length > 0).length })}</Text>
                                     )}
-                                </TouchableOpacity>
-
-                                {isListening ? (
-                                    <Text style={styles.listeningText}>{t('listening') || "Dinliyorum..."}</Text>
-                                ) : (
-                                    <Text style={styles.wordCount}>{t('word_count', { count: dreamText.trim().split(/\s+/).filter(w => w.length > 0).length })}</Text>
-                                )}
+                                </View>
                             </View>
                         </View>
-                    </View>
 
-                    {/* Tags */}
-                    <View style={styles.section}>
-                        <Text style={[styles.sectionTitle, { marginBottom: 12 }]}>{t('tags_label')}</Text>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
-                            <TouchableOpacity
-                                style={[styles.tagButton, { borderWidth: 1, borderColor: '#A855F7', borderStyle: 'dashed', backgroundColor: 'transparent' }]}
-                                onPress={() => setIsTagModalVisible(true)}
-                            >
-                                <Ionicons name="add" size={18} color="#A855F7" style={{ marginRight: 4 }} />
-                                <Text style={[styles.tagText, { color: '#A855F7' }]}>{t('add_tag')}</Text>
-                            </TouchableOpacity>
-
-                            {allTags.map((tagKey, index) => (
+                        {/* Tags */}
+                        <View style={styles.section}>
+                            <Text style={[styles.sectionTitle, { marginBottom: 12 }]}>{t('tags_label')}</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
                                 <TouchableOpacity
-                                    key={index}
-                                    style={[
-                                        styles.tagButton,
-                                        selectedTag === tagKey && styles.tagButtonActive,
-                                        selectedTag !== tagKey && styles.tagButtonInactive
-                                    ]}
-                                    onPress={() => setSelectedTag(tagKey)}
-                                    onLongPress={() => handleDeleteCustomTag(tagKey)}
-                                    delayLongPress={500}
+                                    style={[styles.tagButton, { borderWidth: 1, borderColor: '#A855F7', borderStyle: 'dashed', backgroundColor: 'transparent' }]}
+                                    onPress={() => {
+                                        Keyboard.dismiss();
+                                        setIsTagModalVisible(true);
+                                    }}
                                 >
-                                    {selectedTag === tagKey && <Ionicons name="checkmark" size={16} color="white" style={{ marginRight: 4 }} />}
-                                    <Text style={[styles.tagText, selectedTag === tagKey ? styles.tagTextActive : styles.tagTextInactive]}>
-                                        {defaultTags.includes(tagKey) ? (t(tagKey) || tagKey) : tagKey}
-                                    </Text>
-                                    {customTags.includes(tagKey) && (
-                                        <View style={{ marginLeft: 6, opacity: 0.6 }}>
-                                            <Ionicons name="close-circle-outline" size={14} color={selectedTag === tagKey ? "white" : "#ad92c9"} />
-                                        </View>
-                                    )}
+                                    <Ionicons name="add" size={18} color="#A855F7" style={{ marginRight: 4 }} />
+                                    <Text style={[styles.tagText, { color: '#A855F7' }]}>{t('add_tag')}</Text>
                                 </TouchableOpacity>
-                            ))}
-                        </ScrollView>
-                    </View>
 
-                    {/* Interpreters */}
-                    <View style={styles.section}>
-                        <View style={styles.sectionHeader}>
-                            <Text style={styles.sectionTitle}>{t('choose_interpreter')}</Text>
-                            <View style={styles.aiBadge}>
-                                <Text style={styles.aiBadgeText}>AI</Text>
-                            </View>
-                        </View>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
-                            {interpreters.map((int, index) => (
-                                <TouchableOpacity
-                                    key={index}
-                                    style={styles.interpreterItem}
-                                    onPress={() => setSelectedInterpreter(int.name)}
-                                >
-                                    <View style={[styles.avatarContainer, selectedInterpreter === int.name && styles.avatarContainerActive]}>
-                                        <View style={styles.avatarInner}>
-                                            <Image source={int.image} style={[styles.avatarImage, selectedInterpreter !== int.name && styles.avatarImageInactive]} />
-                                        </View>
-                                        {selectedInterpreter === int.name && (
-                                            <View style={styles.checkBadge}>
-                                                <Ionicons name="checkmark" size={10} color="white" />
+                                {allTags.map((tagKey, index) => (
+                                    <TouchableOpacity
+                                        key={index}
+                                        style={[
+                                            styles.tagButton,
+                                            selectedTag === tagKey && styles.tagButtonActive,
+                                            selectedTag !== tagKey && styles.tagButtonInactive
+                                        ]}
+                                        onPress={() => {
+                                            Keyboard.dismiss();
+                                            setSelectedTag(tagKey);
+                                        }}
+                                        onLongPress={() => handleDeleteCustomTag(tagKey)}
+                                        delayLongPress={500}
+                                    >
+                                        {selectedTag === tagKey && <Ionicons name="checkmark" size={16} color="white" style={{ marginRight: 4 }} />}
+                                        <Text style={[styles.tagText, selectedTag === tagKey ? styles.tagTextActive : styles.tagTextInactive]}>
+                                            {defaultTags.includes(tagKey) ? (t(tagKey) || tagKey) : tagKey}
+                                        </Text>
+                                        {customTags.includes(tagKey) && (
+                                            <View style={{ marginLeft: 6, opacity: 0.6 }}>
+                                                <Ionicons name="close-circle-outline" size={14} color={selectedTag === tagKey ? "white" : "#ad92c9"} />
                                             </View>
                                         )}
-                                    </View>
-                                    <Text style={[styles.interpreterName, selectedInterpreter === int.name && styles.interpreterNameActive]}>{int.name}</Text>
-                                </TouchableOpacity>
-                            ))}
-                        </ScrollView>
-                    </View>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
 
-                    {/* Mood */}
-                    <View style={styles.section}>
-                        <Text style={[styles.sectionTitle, { marginBottom: 12 }]}>{t('dream_feeling_label')}</Text>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
-                            {moods.map((m, index) => (
-                                <TouchableOpacity
-                                    key={index}
-                                    style={[
-                                        styles.moodItem,
-                                        selectedMood === m.value && styles.moodItemActive,
-                                        selectedMood !== m.value && styles.moodItemInactive
-                                    ]}
-                                    onPress={() => setSelectedMood(m.value)}
-                                >
-                                    <View style={styles.moodEmojiContainer}>
-                                        <Text style={[styles.moodEmoji, selectedMood === m.value && styles.moodEmojiActive]}>{m.emoji}</Text>
-                                    </View>
-                                    <Text style={[styles.moodLabel, selectedMood === m.value ? styles.moodLabelActive : styles.moodLabelInactive]}>
-                                        {t(m.labelKey)}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
-                        </ScrollView>
+                        {/* Interpreters */}
+                        <View style={styles.section}>
+                            <View style={styles.sectionHeader}>
+                                <Text style={styles.sectionTitle}>{t('choose_interpreter')}</Text>
+                                <View style={styles.aiBadge}>
+                                    <Text style={styles.aiBadgeText}>AI</Text>
+                                </View>
+                            </View>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
+                                {interpreters.map((int, index) => (
+                                    <TouchableOpacity
+                                        key={index}
+                                        style={styles.interpreterItem}
+                                        onPress={() => {
+                                            Keyboard.dismiss();
+                                            setSelectedInterpreter(int.name);
+                                        }}
+                                    >
+                                        <View style={[styles.avatarContainer, selectedInterpreter === int.name && styles.avatarContainerActive]}>
+                                            <View style={styles.avatarInner}>
+                                                <Image source={int.image} style={[styles.avatarImage, selectedInterpreter !== int.name && styles.avatarImageInactive]} />
+                                            </View>
+                                            {selectedInterpreter === int.name && (
+                                                <View style={styles.checkBadge}>
+                                                    <Ionicons name="checkmark" size={10} color="white" />
+                                                </View>
+                                            )}
+                                        </View>
+                                        <Text style={[styles.interpreterName, selectedInterpreter === int.name && styles.interpreterNameActive]}>{int.name}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
+
+                        {/* Mood */}
+                        <View style={styles.section}>
+                            <Text style={[styles.sectionTitle, { marginBottom: 12 }]}>{t('dream_feeling_label')}</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalScroll}>
+                                {moods.map((m, index) => (
+                                    <TouchableOpacity
+                                        key={index}
+                                        style={[
+                                            styles.moodItem,
+                                            selectedMood === m.value && styles.moodItemActive,
+                                            selectedMood !== m.value && styles.moodItemInactive
+                                        ]}
+                                        onPress={() => {
+                                            Keyboard.dismiss();
+                                            setSelectedMood(m.value);
+                                        }}
+                                    >
+                                        <View style={styles.moodEmojiContainer}>
+                                            <Text style={[styles.moodEmoji, selectedMood === m.value && styles.moodEmojiActive]}>{m.emoji}</Text>
+                                        </View>
+                                        <Text style={[styles.moodLabel, selectedMood === m.value ? styles.moodLabelActive : styles.moodLabelInactive]}>
+                                            {t(m.labelKey)}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
                     </View>
-                </View>
+                </TouchableWithoutFeedback>
             </ScrollView>
 
             {/* Footer */}
@@ -379,6 +435,74 @@ const NewDreamScreen = ({ navigation }) => {
                     </View>
                 </TouchableOpacity>
             </View>
+
+            {/* Profile Incomplete Modal - Customized Design */}
+            <Modal
+                visible={isProfileModalVisible}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setIsProfileModalVisible(false)} // Optional: prevent back button close if critical
+            >
+                <View style={styles.profileModalOverlay}>
+                    <LinearGradient
+                        colors={['rgba(25, 16, 34, 0.95)', 'rgba(42, 31, 61, 0.98)']}
+                        style={styles.profileModalContent}
+                    >
+                        {/* Decorative Icon */}
+                        <View style={styles.profileModalIconContainer}>
+                            <MaterialIcons name="person-outline" size={40} color="#D8B4FE" />
+                            <View style={styles.profileModalIconBadge}>
+                                <MaterialIcons name="priority-high" size={16} color="white" />
+                            </View>
+                        </View>
+
+                        <Text style={styles.profileModalTitle}>{t('profile_incomplete_title') || 'Profiliniz Eksik!'}</Text>
+                        <Text style={styles.profileModalDesc}>
+                            {t('profile_incomplete_desc') || 'Daha isabetli rüya yorumları alabilmek için lütfen profil bilgilerinizi eksiksiz tamamlayın.'}
+                        </Text>
+
+                        {/* Feature List (Why complete profile?) */}
+                        <View style={styles.profileFeatureList}>
+                            <View style={styles.profileFeatureItem}>
+                                <Ionicons name="checkmark-circle" size={16} color="#A855F7" />
+                                <Text style={styles.profileFeatureText}>{t('improve_accuracy', { defaultValue: 'Daha doğru yorumlar' })}</Text>
+                            </View>
+                            <View style={styles.profileFeatureItem}>
+                                <Ionicons name="checkmark-circle" size={16} color="#A855F7" />
+                                <Text style={styles.profileFeatureText}>{t('personalized_insights', { defaultValue: 'Kişiselleştirilmiş içgörüler' })}</Text>
+                            </View>
+                        </View>
+
+                        <View style={styles.profileModalButtons}>
+                            <TouchableOpacity
+                                style={styles.profileLaterButton}
+                                onPress={() => setIsProfileModalVisible(false)}
+                            >
+                                <Text style={styles.profileLaterText}>{t('later') || 'Daha Sonra'}</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.profileCompleteButton}
+                                onPress={() => {
+                                    setIsProfileModalVisible(false);
+                                    // Correct Navigation for Tab Navigator
+                                    navigation.navigate('MainTabs', {
+                                        screen: 'SettingsTab',
+                                        params: { openProfile: true }
+                                    });
+                                }}
+                            >
+                                <LinearGradient
+                                    colors={['#7f13ec', '#650ecc']}
+                                    style={StyleSheet.absoluteFillObject}
+                                />
+                                <Text style={styles.profileCompleteText}>{t('complete_now') || 'Hemen Tamamla'}</Text>
+                                <MaterialIcons name="arrow-forward" size={16} color="white" />
+                            </TouchableOpacity>
+                        </View>
+                    </LinearGradient>
+                </View>
+            </Modal>
 
             {/* Confirmation Modal */}
             <Modal
@@ -455,6 +579,15 @@ const NewDreamScreen = ({ navigation }) => {
                     </View>
                 </KeyboardAvoidingView>
             </Modal>
+
+            {/* Custom Alert */}
+            <CustomAlert
+                visible={alertConfig.visible}
+                title={alertConfig.title}
+                message={alertConfig.message}
+                buttons={alertConfig.buttons}
+                onClose={closeAlert}
+            />
         </View>
     );
 };
@@ -606,7 +739,23 @@ const styles = StyleSheet.create({
     buttonContent: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
     interpretButtonText: { color: 'white', fontSize: 16, fontFamily: 'SplineSans_700Bold' },
     disabledButton: { opacity: 0.5 },
-    disabledButtonText: { color: '#9CA3AF' }
+    disabledButtonText: { color: '#9CA3AF' },
+
+    // NEW PROFILE MODAL STYLES
+    profileModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+    profileModalContent: { width: '100%', maxWidth: 360, borderRadius: 28, padding: 24, paddingVertical: 32, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(127, 19, 236, 0.3)', shadowColor: '#7f13ec', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 30, elevation: 20 },
+    profileModalIconContainer: { width: 80, height: 80, borderRadius: 40, backgroundColor: 'rgba(127, 19, 236, 0.1)', justifyContent: 'center', alignItems: 'center', marginBottom: 24, borderWidth: 1, borderColor: 'rgba(127, 19, 236, 0.3)' },
+    profileModalIconBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#EF4444', width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#2A1F3D' },
+    profileModalTitle: { fontSize: 24, color: 'white', fontFamily: 'SplineSans_700Bold', textAlign: 'center', marginBottom: 12 },
+    profileModalDesc: { fontSize: 16, color: '#ad92c9', fontFamily: 'SplineSans_400Regular', textAlign: 'center', lineHeight: 24, marginBottom: 24 },
+    profileFeatureList: { alignSelf: 'stretch', gap: 12, marginBottom: 32, backgroundColor: 'rgba(255,255,255,0.03)', padding: 16, borderRadius: 16 },
+    profileFeatureItem: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    profileFeatureText: { color: '#D8B4FE', fontSize: 14, fontFamily: 'SplineSans_500Medium' },
+    profileModalButtons: { flexDirection: 'row', gap: 12, width: '100%' },
+    profileLaterButton: { flex: 1, paddingVertical: 16, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
+    profileLaterText: { color: '#9CA3AF', fontFamily: 'SplineSans_600SemiBold', fontSize: 15 },
+    profileCompleteButton: { flex: 1.5, borderRadius: 16, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 },
+    profileCompleteText: { color: 'white', fontFamily: 'SplineSans_700Bold', fontSize: 15, zIndex: 1 }
 });
 
 export default NewDreamScreen;

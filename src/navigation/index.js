@@ -12,6 +12,7 @@ import ChatScreen from '../screens/ChatScreen';
 import OnboardingScreen from '../screens/OnboardingScreen';
 import LockScreen from '../screens/LockScreen';
 import DreamNotesScreen from '../screens/DreamNotesScreen';
+import CreditStoreScreen from '../screens/CreditStoreScreen';
 import TabNavigator from './TabNavigator';
 
 const Stack = createNativeStackNavigator();
@@ -63,6 +64,7 @@ const AppNavigator = () => {
                         <Stack.Screen name="NewDream" component={NewDreamScreen} options={{ presentation: 'fullScreenModal' }} />
                         <Stack.Screen name="Chat" component={ChatScreen} />
                         <Stack.Screen name="DreamNotes" component={DreamNotesScreen} />
+                        <Stack.Screen name="CreditStore" component={CreditStoreScreen} options={{ presentation: 'modal' }} />
                     </>
                 )}
             </Stack.Navigator>

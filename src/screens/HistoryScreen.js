@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Dimensions, Platform, ImageBackground, Image, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Dimensions, Platform, ImageBackground, Image, Alert, TouchableWithoutFeedback, Keyboard, RefreshControl, Animated, Easing } from 'react-native';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useUser } from '../context/UserContext';
+import { supabase } from '../lib/supabase';
 
 const { width } = Dimensions.get('window');
 
 const HistoryScreen = ({ navigation }) => {
-    const { t } = useUser();
+    const { t, user } = useUser();
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedFilter, setSelectedFilter] = useState('filter_all');
 
@@ -24,6 +25,39 @@ const HistoryScreen = ({ navigation }) => {
     ];
 
     const [dreams, setDreams] = useState([]);
+    const [refreshing, setRefreshing] = useState(false);
+    const spinValue = React.useRef(new Animated.Value(0)).current;
+
+    const startSpin = () => {
+        spinValue.setValue(0);
+        Animated.loop(
+            Animated.timing(spinValue, {
+                toValue: 1,
+                duration: 1000,
+                easing: Easing.linear,
+                useNativeDriver: true,
+            })
+        ).start();
+    };
+
+    const stopSpin = () => {
+        spinValue.stopAnimation();
+    };
+
+    const spin = spinValue.interpolate({
+        inputRange: [0, 1],
+        outputRange: ['0deg', '360deg'],
+    });
+
+    const onRefresh = React.useCallback(async () => {
+        setRefreshing(true);
+        startSpin();
+        await loadDreams();
+        setTimeout(() => {
+            setRefreshing(false);
+            stopSpin();
+        }, 500);
+    }, [user]);
 
     useFocusEffect(
         React.useCallback(() => {
@@ -32,12 +66,19 @@ const HistoryScreen = ({ navigation }) => {
     );
 
     const loadDreams = async () => {
+        if (!user) return;
         try {
-            const jsonValue = await AsyncStorage.getItem('user_dreams_history');
-            const data = jsonValue != null ? JSON.parse(jsonValue) : [];
-            // Sort by date descending (newest first)
-            const sortedData = data.sort((a, b) => new Date(b.date) - new Date(a.date));
-            setDreams(sortedData);
+            const { data, error } = await supabase
+                .from('dreams')
+                .select('*')
+                .eq('user_id', user.id)
+                .order('date', { ascending: false });
+
+            if (error) {
+                console.error("Supabase load error:", error);
+                return;
+            }
+            setDreams(data || []);
         } catch (e) {
             console.error("Failed to load dreams", e);
         }
@@ -127,12 +168,20 @@ const HistoryScreen = ({ navigation }) => {
                     style: 'destructive',
                     onPress: async () => {
                         try {
+                            // Optimistic update
                             const updatedDreams = dreams.filter(d => d.id !== dreamId);
                             setDreams(updatedDreams);
-                            await AsyncStorage.setItem('user_dreams_history', JSON.stringify(updatedDreams));
+
+                            const { error } = await supabase
+                                .from('dreams')
+                                .delete()
+                                .eq('id', dreamId);
+
+                            if (error) throw error;
                         } catch (error) {
                             console.error("Error deleting dream:", error);
                             Alert.alert('Hata', 'Rüya silinirken bir sorun oluştu.');
+                            loadDreams(); // Revert on error
                         }
                     }
                 }
@@ -191,131 +240,174 @@ const HistoryScreen = ({ navigation }) => {
     };
 
     return (
-        <View style={styles.container}>
-            {/* Header */}
-            <View style={styles.header}>
-                <View style={styles.headerTop}>
-                    <Text style={styles.headerTitle}>{t('history_title') || 'Rüya Geçmişi'}</Text>
-                </View>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+            <View style={styles.container}>
+                {/* Header */}
+                <View style={[styles.header, { zIndex: 100, elevation: 100, backgroundColor: '#191022' }]}>
+                    <View style={styles.headerTop}>
+                        <Text style={styles.headerTitle}>{t('history_title') || 'Rüya Geçmişi'}</Text>
+                    </View>
 
-                {/* Search Bar */}
-                <View style={styles.searchContainer}>
-                    <View style={styles.searchBar}>
-                        <Ionicons name="search" size={20} color="#ad92c9" style={{ marginLeft: 12 }} />
-                        <TextInput
-                            style={styles.searchInput}
-                            placeholder={t('search_placeholder') || "Rüyalarında ara..."}
-                            placeholderTextColor="#ad92c9"
-                            value={searchQuery}
-                            onChangeText={setSearchQuery}
+                    {/* Search Bar */}
+                    <View style={styles.searchContainer}>
+                        <View style={styles.searchBar}>
+                            <Ionicons name="search" size={20} color="#ad92c9" style={{ marginLeft: 12 }} />
+                            <TextInput
+                                style={styles.searchInput}
+                                placeholder={t('search_placeholder') || "Rüyalarında ara..."}
+                                placeholderTextColor="#ad92c9"
+                                value={searchQuery}
+                                onChangeText={setSearchQuery}
+                            />
+                        </View>
+                    </View>
+
+                    {/* Filters */}
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersContent}>
+                        {filters.map((filter, index) => (
+                            <TouchableOpacity
+                                key={index}
+                                style={[
+                                    styles.filterButton,
+                                    selectedFilter === filter.key ? styles.filterButtonActive : styles.filterButtonInactive
+                                ]}
+                                onPress={() => setSelectedFilter(filter.key)}
+                            >
+                                <Text style={[
+                                    styles.filtertext,
+                                    selectedFilter === filter.key ? styles.filterTextActive : styles.filterTextInactive
+                                ]}>{filter.label}</Text>
+                            </TouchableOpacity>
+                        ))}
+                    </ScrollView>
+                </View>
+                <ScrollView
+                    style={{ flex: 1 }}
+                    contentContainerStyle={styles.scrollContent}
+                    showsVerticalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode="on-drag"
+                    overflow="visible"
+                    refreshControl={
+                        <RefreshControl
+                            refreshing={refreshing}
+                            onRefresh={onRefresh}
+                            tintColor="transparent"
+                            colors={['transparent']}
+                            style={{ backgroundColor: 'transparent', zIndex: 100 }}
                         />
+                    }
+                >
+                    {/* Custom Bear Refresher (Moves with scroll) */}
+                    <View style={{ position: 'absolute', top: -150, left: 0, right: 0, height: 140, alignItems: 'center', justifyContent: 'flex-end', zIndex: 10 }}>
+                        <View style={{ alignItems: 'center', justifyContent: 'center', transform: [{ translateY: 5 }] }}>
+                            {/* Spinning Stars */}
+                            <Animated.View style={{
+                                position: 'absolute',
+                                width: 140,
+                                height: 140,
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                transform: [{ rotate: spin }],
+                                opacity: refreshing ? 1 : 0
+                            }}>
+                                <Ionicons name="star" size={18} color="#FCD34D" style={{ position: 'absolute', top: 10 }} />
+                                <Ionicons name="star" size={12} color="#FCD34D" style={{ position: 'absolute', bottom: 30, right: 30 }} />
+                                <Ionicons name="star" size={15} color="#FCD34D" style={{ position: 'absolute', bottom: 30, left: 30 }} />
+                            </Animated.View>
+
+                            {/* Bear Image (Swap based on state) */}
+                            <Image
+                                source={refreshing ? require('../assets/bear_awake.png') : require('../assets/bear_sleep.png')}
+                                style={{ width: 100, height: 80, resizeMode: 'contain' }}
+                            />
+                        </View>
                     </View>
-                </View>
 
-                {/* Filters */}
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersContent}>
-                    {filters.map((filter, index) => (
-                        <TouchableOpacity
-                            key={index}
-                            style={[
-                                styles.filterButton,
-                                selectedFilter === filter.key ? styles.filterButtonActive : styles.filterButtonInactive
-                            ]}
-                            onPress={() => setSelectedFilter(filter.key)}
-                        >
-                            <Text style={[
-                                styles.filtertext,
-                                selectedFilter === filter.key ? styles.filterTextActive : styles.filterTextInactive
-                            ]}>{filter.label}</Text>
-                        </TouchableOpacity>
-                    ))}
-                </ScrollView>
-            </View>
 
-            <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-
-                {dreams.length === 0 ? (
-                    <View style={{ alignItems: 'center', marginTop: 100, opacity: 0.5 }}>
-                        <Ionicons name="moon-outline" size={64} color="white" />
-                        <Text style={{ color: 'white', marginTop: 16 }}>{t('no_dreams_yet') || 'Henüz kayıtlı rüya yok.'}</Text>
-                    </View>
-                ) : (
-                    <>
-                        {featuredDream && (
-                            <View>
-                                <View style={styles.sectionHeader}>
-                                    <Text style={styles.sectionTitle}>{t('latest_dream') || 'En Son'}</Text>
-                                    <View style={styles.newBadge}>
-                                        <Text style={styles.newBadgeText}>Yeni</Text>
-                                    </View>
-                                </View>
-
-                                <TouchableOpacity
-                                    style={styles.featuredCard}
-                                    activeOpacity={0.9}
-                                    onPress={() => navigation.navigate('Chat', {
-                                        dreamId: featuredDream.id,
-                                        dreamText: featuredDream.text,
-                                        interpreter: featuredDream.interpreter,
-                                        tag: featuredDream.tag,
-                                        mood: featuredDream.mood,
-                                        previousAnalysis: featuredDream.analysis,
-                                        previousMessages: featuredDream.messages
-                                    })}
-                                >
-                                    <ImageBackground
-                                        source={getDreamImage(featuredDream)}
-                                        style={styles.cardImage}
-                                        imageStyle={{ borderRadius: 20 }}
-                                    >
-                                        <LinearGradient
-                                            colors={['transparent', 'rgba(15, 10, 25, 0.95)']}
-                                            style={styles.cardGradient}
-                                        />
-
-                                        <View style={styles.cardTag}>
-                                            <Text style={styles.cardTagText}>
-                                                {filters.find(f => f.key === featuredDream.mood)?.label || featuredDream.tag || 'RÜYA'}
-                                            </Text>
+                    {dreams.length === 0 ? (
+                        <View style={{ alignItems: 'center', marginTop: 100, opacity: 0.5 }}>
+                            <Ionicons name="moon-outline" size={64} color="white" />
+                            <Text style={{ color: 'white', marginTop: 16 }}>{t('no_dreams_yet') || 'Henüz kayıtlı rüya yok.'}</Text>
+                        </View>
+                    ) : (
+                        <>
+                            {featuredDream && (
+                                <View>
+                                    <View style={styles.sectionHeader}>
+                                        <Text style={styles.sectionTitle}>{t('latest_dream') || 'En Son'}</Text>
+                                        <View style={styles.newBadge}>
+                                            <Text style={styles.newBadgeText}>Yeni</Text>
                                         </View>
+                                    </View>
 
-                                        <View style={styles.cardContent}>
-                                            <Text style={styles.cardDate}>{formatDate(featuredDream.date).fullDate}</Text>
-                                            <Text style={styles.cardTitle} numberOfLines={1}>{featuredDream.title}</Text>
-                                            <Text style={styles.cardDescription} numberOfLines={2}>
-                                                {featuredDream.text}
-                                            </Text>
+                                    <TouchableOpacity
+                                        style={styles.featuredCard}
+                                        activeOpacity={0.9}
+                                        onPress={() => navigation.navigate('Chat', {
+                                            dreamId: featuredDream.id,
+                                            dreamText: featuredDream.text,
+                                            interpreter: featuredDream.interpreter,
+                                            tag: featuredDream.tag,
+                                            mood: featuredDream.mood,
+                                            previousAnalysis: featuredDream.analysis,
+                                            previousMessages: featuredDream.messages
+                                        })}
+                                    >
+                                        <ImageBackground
+                                            source={getDreamImage(featuredDream)}
+                                            style={styles.cardImage}
+                                            imageStyle={{ borderRadius: 20 }}
+                                        >
+                                            <LinearGradient
+                                                colors={['transparent', 'rgba(15, 10, 25, 0.95)']}
+                                                style={styles.cardGradient}
+                                            />
 
-                                            <View style={styles.aiResultBadge}>
-                                                <Ionicons name="sparkles" size={12} color="#A855F7" />
-                                                <Text style={styles.aiResultText} numberOfLines={1}>
-                                                    {getInsight(featuredDream.analysis)}
+                                            <View style={styles.cardTag}>
+                                                <Text style={styles.cardTagText}>
+                                                    {filters.find(f => f.key === featuredDream.mood)?.label || featuredDream.tag || 'RÜYA'}
                                                 </Text>
                                             </View>
-                                        </View>
-                                    </ImageBackground>
-                                </TouchableOpacity>
-                            </View>
-                        )}
 
-                        {/* Grouped Lists */}
-                        {renderSection(t('today') || 'Bugün', groups.today)}
-                        {renderSection(t('yesterday') || 'Dün', groups.yesterday)}
-                        {renderSection(t('this_week') || 'Bu Hafta', groups.thisWeek)}
-                        {renderSection(t('last_week') || 'Geçen Hafta', groups.lastWeek)}
-                        {renderSection(t('last_month') || 'Geçen Ay', groups.lastMonth)}
-                        {renderSection(t('older_dreams') || 'Daha Eski', groups.older)}
+                                            <View style={styles.cardContent}>
+                                                <Text style={styles.cardDate}>{formatDate(featuredDream.date).fullDate}</Text>
+                                                <Text style={styles.cardTitle} numberOfLines={1}>{featuredDream.title}</Text>
+                                                <Text style={styles.cardDescription} numberOfLines={2}>
+                                                    {featuredDream.text}
+                                                </Text>
 
-                    </>
-                )}
-            </ScrollView>
+                                                <View style={styles.aiResultBadge}>
+                                                    <Ionicons name="sparkles" size={12} color="#A855F7" />
+                                                    <Text style={styles.aiResultText} numberOfLines={1}>
+                                                        {getInsight(featuredDream.analysis)}
+                                                    </Text>
+                                                </View>
+                                            </View>
+                                        </ImageBackground>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
 
-            {/* FAB for New Dream - Optional, positioned absolute bottom right if needed */}
-            <TouchableOpacity style={styles.fab} onPress={() => navigation.navigate('NewDream')}>
-                <Ionicons name="add" size={32} color="white" />
-            </TouchableOpacity>
+                            {/* Grouped Lists */}
+                            {renderSection(t('today') || 'Bugün', groups.today)}
+                            {renderSection(t('yesterday') || 'Dün', groups.yesterday)}
+                            {renderSection(t('this_week') || 'Bu Hafta', groups.thisWeek)}
+                            {renderSection(t('last_week') || 'Geçen Hafta', groups.lastWeek)}
+                            {renderSection(t('last_month') || 'Geçen Ay', groups.lastMonth)}
+                            {renderSection(t('older_dreams') || 'Daha Eski', groups.older)}
 
-        </View>
+                        </>
+                    )}
+                </ScrollView>
+
+                {/* FAB for New Dream - Optional, positioned absolute bottom right if needed */}
+                <TouchableOpacity style={styles.fab} onPress={() => navigation.navigate('NewDream')}>
+                    <Ionicons name="add" size={32} color="white" />
+                </TouchableOpacity>
+
+            </View>
+        </TouchableWithoutFeedback>
     );
 };
 
