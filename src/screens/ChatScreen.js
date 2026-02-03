@@ -147,219 +147,80 @@ const ChatScreen = ({ navigation, route }) => {
 
     const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
-    const constructPrompt = (isChatMode = false) => {
-        // 1. Define Persona
-        let systemRole = "Act as a wise, master dream interpreter who combines psychology and spirituality.";
-        if (interpreter === 'Sigmund Freud') systemRole = "Act as Sigmund Freud. Use psychoanalysis, focus on repressed desires, childhood, and sexuality. Be analytical and authoritative.";
-        if (interpreter === 'Carl Jung') systemRole = "Act as Carl Jung. Focus on archetypes, the collective unconscious, and individuation. Be philosophical and deep.";
-        if (interpreter === 'İbn-i Şirin') systemRole = "Act as Ibn-i Sirin. Interpret based on Islamic tradition and spiritual symbols. Be wise, religious, and respectful.";
-        if (interpreter === 'Baba Vanga') systemRole = "Act as Baba Vanga. Be mystical, predictive, and slightly cryptic. Focus on future warnings.";
-        if (interpreter === 'Nostradamus') systemRole = "Act as Nostradamus. Write in a slightly poetic, prophetic riddle style, then explain it.";
 
-        // 2. Prepare Profile Context
-        let profileContext = "User Profile: Anonymous";
-        if (profile) {
-            const age = profile.birth_date ? (new Date().getFullYear() - new Date(profile.birth_date).getFullYear()) : '?';
-            profileContext = `
-User Profile (for context only):
-- Age: ${age}
-- Gender: ${profile.gender || '?'}
-- Job: ${profile.job || '?'}
-- Marital Status: ${profile.marital_status || '?'}
-- Zodiac: ${profile.zodiac_sign || '?'}
-            `.trim();
-        }
 
-        // 3. Construct System Instruction (The "Brain")
-        let systemInstruction = "";
 
-        if (!isChatMode) {
-            // INITIAL ANALYSIS MODE (Deep, Mystical, Detailed)
-            systemInstruction = `
-${systemRole}
-
-${profileContext}
-
-CRITICAL RULES FOR INTERPRETATION:
-
-1. **ADAPTIVE VOCABULARY (Crucial)**:
-   - **Analyze the User's Job**: 
-     - If the user has an academic/white-collar job (e.g., Doctor, Engineer, Teacher, Architect), you may use some psychological terminology (like "archetype", "subconscious"), but keep it fluid.
-     - **DEFAULT / General User**: If the job is manual, general, student, or unknown, you MUST **SIMPLIFY** your language. 
-       - *Forbidden*: "Kolektif bilinçdışı", "Anima/Animus", "Metaforik imge".
-       - *Allowed*: "İç dünyan", "Ruhunun derinlikleri", "Sembol".
-       - Speak plainly, like a wise friend, not a textbook.
-
-2. **Holistic Synthesis**: 
-   - Do NOT list user details. WEAVE them into the story only if relevant.
-   - Example: "Since you work as a [Job], this symbol might represent..." (Only if it makes sense).
-
-3. **Language Rule**: 
-   - The prompt is in English, but you MUST respond in the **SAME LANGUAGE** as the user's "Dream Text".
-
-4. **Format**: 
-   - No headers. No "Introduction".
-   - Direct, flowing, warm, and mystical narrative.
-
-5. **ENGAGEMENT HOOK (Crucial)**:
-   - You MUST end your interpretation with a **Subtle Mystery** or **Cliffhanger**.
-   - Hint at a hidden detail, a connection to a specific person, or a future warning that you haven't fully explained yet.
-   - Example rule: "...there is one specific detail about the [dream_object] that suggests a secret from your past, but I am not sure if I should reveal it yet..."
-   - **Goal**: Trigger curiosity so the user asks "What is it?" or "Tell me more".
-
-6. **SAFETY GUARDRAILS (ZERO TOLERANCE/CRITICAL)**:
-   - **Trigger**: If the dream contains themes of suicide, self-harm, death, jumping from heights, or extreme violence.
-   - **Rule 1 (No Romanticizing)**: NEVER frame harmful acts as "peaceful", "safe", or "a return to the womb". 
-     - *Bad*: "Jumping from the roof is like returning to mother's arms."
-     - *Good*: "Falling often symbolizes a loss of control or a desire to let go of a heavy burden."
-   - **Rule 2 (Mandatory Disclaimer)**: You MUST append this exact note at the very end of your response if these themes are present:
-     - "Note: Dreams are symbolic. If you feel overwhelmed, please seek professional support." (Translate this to the response language).
-            `.trim();
-        } else {
-            // CONVERSATIONAL CHAT MODE (Responsive, Concise, Direct)
-            systemInstruction = `
-${systemRole}
-
-${profileContext}
-
-You have already interpreted the user's dream. Now you are in a CONVERSATIONAL MODE.
-
-RULES FOR CHAT:
-1. **Direct & Concise**: Answer the user's specific question directly. Do NOT go into long monologues unless asked.
-2. **Context**: Key context is the dream text and your previous interpretation, but your FOCUS is the user's current query.
-3. **Tone**: Keep the persona (${interpreter}) but be more interactive, shorter, and like a real conversation.
-4. **Length Control**: If the user asks for a short explanation ("Kısaca anlat", "zetle"), you MUST be brief.
-5. **No Repetition**: Do NOT re-interpret the whole dream unless explicitly asked to "interpret again".
-6. **Safety**: Continue to adhere to safety guardrails for self-harm themes.
-7. **Language**: Respond in the same language as the user's message.
-            `.trim();
-        }
-
-        // 4. Initial User Payload
-        const initialUserMessage = `
-Dream Text: "${dreamText}"
-Theme: ${tag || 'General'}
-Main Emotion: ${mood || 'Neutral'}
-
-Interpret this dream now.
-        `.trim();
-
-        return { systemInstruction, initialUserMessage };
-    };
-
-    const fetchGeminiResponse = async (history, systemInstruction) => {
-        const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
-        const models = ['gemini-3-pro-preview', 'gemini-2.0-flash-001', 'gemini-1.5-pro-001'];
-
-        for (const model of models) {
-            let attempts = 0;
-            const maxAttempts = 3;
-
-            while (attempts < maxAttempts) {
-                try {
-                    // Status silenced to avoid technical jargon
-                    // const statusMsg = `Model deneniyor: ${model}`;
-                    // setLoadingStatus(statusMsg);
-
-                    const url = `https://aiplatform.googleapis.com/v1beta1/publishers/google/models/${model}:generateContent?key=${apiKey}`;
-
-                    const requestBody = {
-                        system_instruction: { parts: [{ text: systemInstruction }] },
-                        contents: history
-                    };
-
-                    // console.log("🔵 API Request Body:", JSON.stringify(requestBody).substring(0, 100) + "..."); // Silenced/Truncated log
-
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(requestBody)
-                    });
-
-                    const data = await response.json();
-
-                    if (data.error) {
-                        if (data.error.code === 429 || data.error.status === 'RESOURCE_EXHAUSTED') {
-                            await delay(3000);
-                            attempts++;
-                            continue;
-                        }
-                        console.warn(`Model ${model} error:`, data.error.message);
-                        break;
-                    }
-
-                    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (text) return text;
-                    break;
-
-                } catch (error) {
-                    // console.error(`Network Error on ${model}:`, error); // Reduced log noise
-                    if (attempts < 2) {
-                        setLoadingStatus("Bağlantı zayıf, tekrar deneniyor...");
-                        await delay(2000);
-                        attempts++;
-                        continue;
-                    }
-                    break;
-                }
-            }
-        }
-        return t('interpreter_response_default') + " (Sunucu meşgul)";
-    };
 
     const triggerAnalysis = async () => {
-        const { systemInstruction, initialUserMessage } = constructPrompt();
         setLoading(true);
         const interpreterName = interpreter === 'AI' ? 'Yapay Zeka' : interpreter;
         setLoadingStatus(t('analyzing_dream_by', { name: interpreterName }) || `${interpreterName} rüyanı inceliyor...`);
 
-        // Initial history is just the dream
-        const history = [{
-            role: 'user',
-            parts: [{ text: initialUserMessage }]
-        }];
+        try {
+            const { data, error } = await supabase.functions.invoke('interpret-dream', {
+                body: {
+                    dreamText,
+                    interpreter,
+                    profile,
+                    history: [],
+                    isChatMode: false,
+                    tag,
+                    mood
+                }
+            });
 
-        const aiResponse = await fetchGeminiResponse(history, systemInstruction);
-
-        const analysisMsg = {
-            id: Date.now(),
-            type: 'ai',
-            text: aiResponse,
-            time: getCurrentTime(),
-            highlighted: true
-        };
-        setMessages(prev => [...prev, analysisMsg]);
-        setLoading(false);
-        setLoadingStatus("");
-
-        // SAVE DREAM TO SUPABASE
-        if (user) {
-            try {
-                const newId = Date.now().toString();
-                const newDream = {
-                    id: newId,
-                    user_id: user.id,
-                    date: new Date().toISOString(),
-                    title: dreamText.length > 30 ? dreamText.substring(0, 30) + "..." : dreamText,
-                    text: dreamText,
-                    analysis: aiResponse,
-                    mood: mood || 'feeling_neutral',
-                    tag: tag || 'tag_general',
-                    interpreter: interpreter,
-                    messages: [...messages, analysisMsg] // Save initial flow
-                };
-
-                const { error } = await supabase
-                    .from('dreams')
-                    .insert(newDream);
-
-                if (error) throw error;
-
-                setCurrentDreamId(newId);
-                console.log("Dream saved to Supabase successfully!");
-            } catch (error) {
-                console.error("Failed to save dream:", error);
+            if (error) {
+                console.error("Supabase Edge Function Error:", error);
+                throw error;
             }
+
+            const aiResponse = data?.text || t('interpreter_response_default');
+
+            const analysisMsg = {
+                id: Date.now(),
+                type: 'ai',
+                text: aiResponse,
+                time: getCurrentTime(),
+                highlighted: true
+            };
+            setMessages(prev => [...prev, analysisMsg]);
+            setLoading(false);
+            setLoadingStatus("");
+
+            // SAVE DREAM TO SUPABASE
+            if (user) {
+                try {
+                    const newId = Date.now().toString();
+                    const newDream = {
+                        id: newId,
+                        user_id: user.id,
+                        date: new Date().toISOString(),
+                        title: dreamText.length > 30 ? dreamText.substring(0, 30) + "..." : dreamText,
+                        text: dreamText,
+                        analysis: aiResponse,
+                        mood: mood || 'feeling_neutral',
+                        tag: tag || 'tag_general',
+                        interpreter: interpreter,
+                        messages: [...messages, analysisMsg] // Save initial flow
+                    };
+
+                    const { error } = await supabase
+                        .from('dreams')
+                        .insert(newDream);
+
+                    if (error) throw error;
+
+                    setCurrentDreamId(newId);
+                    console.log("Dream saved to Supabase successfully!");
+                } catch (error) {
+                    console.error("Failed to save dream:", error);
+                }
+            }
+        } catch (error) {
+            console.error("Analysis failed:", error);
+            setLoading(false);
+            setLoadingStatus("");
+            alert(t('error') + ": " + error.message);
         }
     };
 
@@ -391,7 +252,7 @@ Interpret this dream now.
         );
     };
 
-    const handeSend = async () => {
+    const handleSend = async () => {
         if (inputText.trim().length === 0) return;
 
         // 1. Check Credits First
@@ -420,43 +281,47 @@ Interpret this dream now.
         const interpreterName = interpreter === 'AI' ? 'Yapay Zeka' : interpreter;
         setLoadingStatus(`${interpreterName} yazıyor...`);
 
-        // Build History
-        const { systemInstruction, initialUserMessage } = constructPrompt(true);
+        try {
+            const updatedMessagesWithUser = [...messages, newMsg];
 
-        // Convert 'messages' + 'newMsg' to Vertex API format
-        const fullConversation = [...messages, newMsg];
+            const { data, error } = await supabase.functions.invoke('interpret-dream', {
+                body: {
+                    dreamText,
+                    interpreter,
+                    profile,
+                    history: updatedMessagesWithUser,
+                    isChatMode: true,
+                    tag,
+                    mood
+                }
+            });
 
-        const apiHistory = fullConversation.map((msg, index) => {
-            // Special handling for the very first message which is the Dream Text
-            if (index === 0 && msg.type === 'user') {
-                return {
-                    role: 'user',
-                    parts: [{ text: initialUserMessage }]
-                };
-            }
-            return {
-                role: msg.type === 'user' ? 'user' : 'model',
-                parts: [{ text: msg.text }]
+            if (error) throw error;
+
+            const aiText = data?.text || t('interpreter_response_default');
+
+            const aiReply = {
+                id: Date.now() + 1,
+                type: 'ai',
+                text: aiText,
+                time: getCurrentTime()
             };
-        });
 
-        const aiText = await fetchGeminiResponse(apiHistory, systemInstruction);
+            const updatedMessages = [...updatedMessagesWithUser, aiReply];
+            setMessages(updatedMessages);
 
-        const aiReply = {
-            id: Date.now() + 1,
-            type: 'ai',
-            text: aiText,
-            time: getCurrentTime()
-        };
+            setLoading(false);
+            setLoadingStatus("");
 
-        const updatedMessages = [...messages, newMsg, aiReply];
-        setMessages(updatedMessages);
+            // Save updated conversation
+            await saveConversation(updatedMessages);
 
-        setLoading(false);
-        setLoadingStatus("");
-
-        // Save updated conversation
-        await saveConversation(updatedMessages);
+        } catch (error) {
+            console.error("Chat Error:", error);
+            setLoading(false);
+            setLoadingStatus("");
+            alert(t('error') + ": " + error.message);
+        }
     };
 
     // Share Logic
@@ -742,7 +607,7 @@ Interpret this dream now.
                                     onChangeText={setInputText}
                                 />
                             </View>
-                            <TouchableOpacity style={styles.sendButton} onPress={handeSend}>
+                            <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
                                 <LinearGradient
                                     colors={['#A855F7', '#7E22CE']}
                                     style={styles.sendGradient}
